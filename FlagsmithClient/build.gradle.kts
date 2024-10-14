@@ -41,11 +41,15 @@ kotlin {
     iosX64()
 
     sourceSets {
-        val androidMain by getting {
+        val commonMain by getting {
             dependencies {
                 implementation(libs.kotlinx.serialization.json)
                 implementation(libs.kotlinx.coroutines.core)
+            }
+        }
 
+        val androidMain by getting {
+            dependencies {
                 // HTTP Client
                 implementation(libs.retrofit)
                 implementation(libs.retrofit.converter.kotlinxSerialization)
