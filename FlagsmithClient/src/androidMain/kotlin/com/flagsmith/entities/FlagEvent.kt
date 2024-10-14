@@ -1,7 +1,9 @@
 package com.flagsmith.entities
 
-import com.google.gson.annotations.SerializedName
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 
+@Serializable
 internal data class FlagEvent (
-    @SerializedName(value = "updated_at") val updatedAt: Double
+    @SerialName(value = "updated_at") val updatedAt: Double
 )

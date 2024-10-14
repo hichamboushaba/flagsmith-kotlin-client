@@ -16,12 +16,12 @@ import java.util.concurrent.TimeUnit
 enum class MockEndpoint(val path: String, val body: String) {
     GET_IDENTITIES(IdentityFlagsAndTraitsEndpoint("").path, MockResponses.getIdentities),
     GET_FLAGS(FlagsEndpoint.path, MockResponses.getFlags),
-    SET_TRAIT(TraitsEndpoint(Trait(key = "", traitValue = ""), "").path, MockResponses.setTrait),
-    SET_TRAITS(TraitsBulkEndpoint(listOf(Trait(key = "", traitValue = "")), "").path, MockResponses.setTraits),
+    SET_TRAIT(TraitsEndpoint(Trait(key = "", value = ""), "").path, MockResponses.setTrait),
+    SET_TRAITS(TraitsBulkEndpoint(listOf(Trait(key = "", value = "")), "").path, MockResponses.setTraits),
     GET_TRANSIENT_IDENTITIES(IdentityFlagsAndTraitsEndpoint("").path, MockResponses.getTransientIdentities),
-    SET_TRAIT_INTEGER(TraitsEndpoint(Trait(key = "", traitValue = ""), "").path, MockResponses.setTraitInteger),
-    SET_TRAIT_DOUBLE(TraitsEndpoint(Trait(key = "", traitValue = ""), "").path, MockResponses.setTraitDouble),
-    SET_TRAIT_BOOLEAN(TraitsEndpoint(Trait(key = "", traitValue = ""), "").path, MockResponses.setTraitBoolean),
+    SET_TRAIT_INTEGER(TraitsEndpoint(Trait(key = "", value = ""), "").path, MockResponses.setTraitInteger),
+    SET_TRAIT_DOUBLE(TraitsEndpoint(Trait(key = "", value = ""), "").path, MockResponses.setTraitDouble),
+    SET_TRAIT_BOOLEAN(TraitsEndpoint(Trait(key = "", value = ""), "").path, MockResponses.setTraitBoolean),
     GET_IDENTITIES_TRAIT_STRING(
         IdentityFlagsAndTraitsEndpoint("").path,
         MockResponses.getTraitString

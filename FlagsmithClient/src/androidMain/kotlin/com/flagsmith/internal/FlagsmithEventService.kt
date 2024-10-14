@@ -2,8 +2,8 @@ package com.flagsmith.internal
 
 import android.util.Log
 import com.flagsmith.entities.FlagEvent
-import com.google.gson.Gson
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit
 internal class FlagsmithEventService constructor(
     private val eventSourceBaseUrl: String?,
     private val environmentKey: String,
+    private val json: Json,
     private val updates: (Result<FlagEvent>) -> Unit
 ) {
     private val sseClient = OkHttpClient.Builder()
@@ -50,7 +51,7 @@ internal class FlagsmithEventService constructor(
             super.onEvent(eventSource, id, type, data)
             Log.d(TAG, "onEvent: $data")
             if (type != null && type == "environment_updated" && data.isNotEmpty()) {
-                val flagEvent = Gson().fromJson(data, FlagEvent::class.java)
+                val flagEvent = json.decodeFromString<FlagEvent>(data)
                 sseEventsFlow.tryEmit(flagEvent)
                 updates(Result.success(flagEvent))
             }

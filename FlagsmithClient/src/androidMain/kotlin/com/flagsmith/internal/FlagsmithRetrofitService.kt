@@ -6,11 +6,13 @@ import com.flagsmith.FlagsmithCacheConfig
 import com.flagsmith.entities.Flag
 import com.flagsmith.entities.IdentityAndTraits
 import com.flagsmith.entities.IdentityFlagsAndTraits
+import kotlinx.serialization.json.Json
 import okhttp3.Cache
 import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import retrofit2.*
-import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
@@ -45,6 +47,7 @@ interface FlagsmithRetrofitService {
             readTimeoutSeconds: Long,
             writeTimeoutSeconds: Long,
             timeTracker: FlagsmithEventTimeTracker,
+            json: Json,
             klass: Class<T>
         ): Pair<FlagsmithRetrofitService, Cache?> {
             fun cacheControlInterceptor(): Interceptor {
@@ -99,7 +102,9 @@ interface FlagsmithRetrofitService {
 
             val retrofit = Retrofit.Builder()
                 .baseUrl(baseUrl)
-                .addConverterFactory(GsonConverterFactory.create())
+                .addConverterFactory(
+                    json.asConverterFactory("application/json; charset=UTF8".toMediaType())
+                )
                 .client(client)
                 .build()
 

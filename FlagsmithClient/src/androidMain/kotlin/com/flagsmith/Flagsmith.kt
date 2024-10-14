@@ -2,18 +2,10 @@ package com.flagsmith
 
 import android.content.Context
 import android.util.Log
-import com.flagsmith.entities.Flag
-import com.flagsmith.entities.Identity
-import com.flagsmith.entities.IdentityAndTraits
-import com.flagsmith.entities.IdentityFlagsAndTraits
-import com.flagsmith.entities.Trait
-import com.flagsmith.entities.TraitWithIdentity
-import com.flagsmith.internal.FlagsmithAnalytics
-import com.flagsmith.internal.FlagsmithEventService
-import com.flagsmith.internal.FlagsmithEventTimeTracker
-import com.flagsmith.internal.FlagsmithRetrofitService
-import com.flagsmith.internal.enqueueWithResult
+import com.flagsmith.entities.*
+import com.flagsmith.internal.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.serialization.json.Json
 import okhttp3.Cache
 import java.io.IOException
 
@@ -49,32 +41,34 @@ class Flagsmith constructor(
     private var lastUsedIdentity: String? = null
     private var analytics: FlagsmithAnalytics? = null
 
-    private val eventService: FlagsmithEventService? =
-        if (!enableRealtimeUpdates) null
-        else FlagsmithEventService(eventSourceBaseUrl = eventSourceBaseUrl, environmentKey = environmentKey) { event ->
-            if (event.isSuccess) {
-                lastEventUpdate = event.getOrNull()?.updatedAt ?: lastEventUpdate
+    private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates) null else FlagsmithEventService(
+        eventSourceBaseUrl = eventSourceBaseUrl,
+        json = defaultJson,
+        environmentKey = environmentKey
+    ) { event ->
+        if (event.isSuccess) {
+            lastEventUpdate = event.getOrNull()?.updatedAt ?: lastEventUpdate
 
-                // Check whether this event is anything new
-                if (lastEventUpdate > lastFlagFetchTime) {
-                    // First evict the cache otherwise we'll be stuck with the old values
-                    cache?.evictAll()
-                    lastFlagFetchTime = lastEventUpdate
+            // Check whether this event is anything new
+            if (lastEventUpdate > lastFlagFetchTime) {
+                // First evict the cache otherwise we'll be stuck with the old values
+                cache?.evictAll()
+                lastFlagFetchTime = lastEventUpdate
 
-                    // Now we can get the new values, which will automatically be emitted to the flagUpdateFlow
-                    getFeatureFlags(lastUsedIdentity) { res ->
-                        if (res.isFailure) {
-                            Log.e(
-                                "Flagsmith",
-                                "Error getting flags in SSE stream: ${res.exceptionOrNull()}"
-                            )
-                        } else {
-                            Log.i("Flagsmith", "Got flags due to SSE event: $event")
-                        }
+                // Now we can get the new values, which will automatically be emitted to the flagUpdateFlow
+                getFeatureFlags(lastUsedIdentity) { res ->
+                    if (res.isFailure) {
+                        Log.e(
+                            "Flagsmith",
+                            "Error getting flags in SSE stream: ${res.exceptionOrNull()}"
+                        )
+                    } else {
+                        Log.i("Flagsmith", "Got flags due to SSE event: $event")
                     }
                 }
             }
         }
+    }
 
     // The last time we got an event from the SSE stream or via the API
     private var lastEventUpdate: Double = 0.0
@@ -89,7 +83,9 @@ class Flagsmith constructor(
         val pair = FlagsmithRetrofitService.create<FlagsmithRetrofitService>(
             baseUrl = baseUrl, environmentKey = environmentKey, context = context, cacheConfig = cacheConfig,
             requestTimeoutSeconds = requestTimeoutSeconds, readTimeoutSeconds = readTimeoutSeconds,
-            writeTimeoutSeconds = writeTimeoutSeconds, timeTracker = this, klass = FlagsmithRetrofitService::class.java)
+            writeTimeoutSeconds = writeTimeoutSeconds, timeTracker = this,
+            json = defaultJson, klass = FlagsmithRetrofitService::class.java
+        )
         retrofit = pair.first
         cache = pair.second
 
@@ -106,7 +102,12 @@ class Flagsmith constructor(
         const val DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS = 10
     }
 
-    fun getFeatureFlags(identity: String? = null, traits: List<Trait>? = null, transient: Boolean = false, result: (Result<List<Flag>>) -> Unit) {
+    fun getFeatureFlags(
+        identity: String? = null,
+        traits: List<Trait>? = null,
+        transient: Boolean = false,
+        result: (Result<List<Flag>>) -> Unit
+    ) {
         // Save the last used identity as we'll refresh with this if we get update events
         lastUsedIdentity = identity
 
@@ -162,22 +163,26 @@ class Flagsmith constructor(
     fun setTrait(trait: Trait, identity: String, result: (Result<TraitWithIdentity>) -> Unit) =
         retrofit.postTraits(IdentityAndTraits(identity, listOf(trait)))
             .enqueueWithResult(result = {
-                result(it.map { response -> TraitWithIdentity(
-                    key = response.traits.first().key,
-                    traitValue = response.traits.first().traitValue,
-                    identity = Identity(identity)
-                )})
+                result(it.map { response ->
+                    TraitWithIdentity(
+                        key = response.traits.first().key,
+                        traitValue = response.traits.first().traitValue,
+                        identity = Identity(identity)
+                    )
+                })
             })
 
     fun setTraits(traits: List<Trait>, identity: String, result: (Result<List<TraitWithIdentity>>) -> Unit) {
         retrofit.postTraits(IdentityAndTraits(identity, traits)).enqueueWithResult(result = {
-            result(it.map { response -> response.traits.map { trait ->
-                TraitWithIdentity(
-                    key = trait.key,
-                    traitValue = trait.traitValue,
-                    identity = Identity(identity)
-                )
-            }})
+            result(it.map { response ->
+                response.traits.map { trait ->
+                    TraitWithIdentity(
+                        key = trait.key,
+                        traitValue = trait.traitValue,
+                        identity = Identity(identity)
+                    )
+                }
+            })
         })
     }
 

@@ -8,11 +8,7 @@ import com.flagsmith.entities.FeatureStatePutBody
 import com.flagsmith.entities.Flag
 import com.flagsmith.internal.FlagsmithEventTimeTracker
 import com.flagsmith.internal.FlagsmithRetrofitServiceTest
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
 import org.junit.After
 import org.junit.Assert
 import org.junit.Before
@@ -74,7 +70,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
             baseUrl = "https://api.flagsmith.com/api/v1/", environmentKey = environmentKey, context = mockApplicationContext,
             cacheConfig = FlagsmithCacheConfig(enableCache = false),
             timeTracker = this, requestTimeoutSeconds = requestTimeoutSeconds, readTimeoutSeconds = readTimeoutSeconds,
-            writeTimeoutSeconds = writeTimeoutSeconds,  klass = FlagsmithRetrofitServiceTest::class.java).first
+            writeTimeoutSeconds = writeTimeoutSeconds, json = defaultJson, klass = FlagsmithRetrofitServiceTest::class.java).first
     }
 
     @After

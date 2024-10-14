@@ -1,9 +1,11 @@
 package com.flagsmith.entities
 
-import com.google.gson.annotations.SerializedName
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 
+@Serializable
 data class IdentityAndTraits(
-    @SerializedName(value = "identifier") val identifier: String,
-    @SerializedName(value = "traits") val traits: List<Trait>,
-    @SerializedName(value = "transient") val transient: Boolean? = null
+    @SerialName(value = "identifier") val identifier: String,
+    @SerialName(value = "traits") val traits: List<Trait>,
+    @SerialName(value = "transient") val transient: Boolean? = null
 )

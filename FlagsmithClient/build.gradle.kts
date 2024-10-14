@@ -11,6 +11,7 @@ plugins {
     alias(libs.plugins.androidGradleLibrary)
     alias(libs.plugins.kover)
     alias(libs.plugins.kotlin.multiplatform)
+    alias(libs.plugins.kotlin.plugin.serialization)
     id("maven-publish")
 }
 
@@ -42,12 +43,12 @@ kotlin {
     sourceSets {
         val androidMain by getting {
             dependencies {
-                implementation(libs.gson)
+                implementation(libs.kotlinx.serialization.json)
                 implementation(libs.kotlinx.coroutines.core)
 
                 // HTTP Client
                 implementation(libs.retrofit)
-                implementation(libs.converter.gson)
+                implementation(libs.retrofit.converter.kotlinxSerialization)
 
                 // Server Sent Events
                 implementation(libs.okhttp.sse)

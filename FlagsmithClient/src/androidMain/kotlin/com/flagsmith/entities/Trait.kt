@@ -1,13 +1,16 @@
 package com.flagsmith.entities
 
 
-import com.google.gson.annotations.SerializedName
+import kotlinx.serialization.*
 
-
-data class Trait (
+@Serializable
+data class Trait(
     val identifier: String? = null,
-    @SerializedName(value = "trait_key") val key: String,
-    @SerializedName(value = "trait_value") val traitValue: Any,
+    @SerialName(value = "trait_key")
+    val key: String,
+    @SerialName(value = "trait_value")
+    @Serializable(with = DynamicValueDeserializer::class)
+    val traitValue: Any,
     val transient: Boolean = false
 ) {
 
@@ -25,13 +28,15 @@ data class Trait (
 
     @Deprecated("Use traitValue instead or one of the type-safe getters", ReplaceWith("traitValue"))
     val value: String
-        get()  { return traitValue as? String ?: traitValue.toString() }
+        get() {
+            return traitValue as? String ?: traitValue.toString()
+        }
 
     val stringValue: String?
         get() = traitValue as? String
 
     val intValue: Int?
-        get()  {
+        get() {
             return when (traitValue) {
                 is Int -> traitValue
                 is Double -> traitValue.toInt()
@@ -46,9 +51,12 @@ data class Trait (
         get() = traitValue as? Boolean
 }
 
-data class TraitWithIdentity (
-    @SerializedName(value = "trait_key") val key: String,
-    @SerializedName(value = "trait_value") val traitValue: Any,
+data class TraitWithIdentity(
+    @SerialName(value = "trait_key")
+    val key: String,
+    @SerialName(value = "trait_value")
+    @Serializable(with = DynamicValueDeserializer::class)
+    val traitValue: Any,
     val identity: Identity,
     val transient: Boolean = false
 ) {
@@ -66,13 +74,15 @@ data class TraitWithIdentity (
 
     @Deprecated("Use traitValue instead or one of the type-safe getters", ReplaceWith("traitValue"))
     val value: String
-        get()  { return traitValue as? String ?: traitValue.toString() }
+        get() {
+            return traitValue as? String ?: traitValue.toString()
+        }
 
     val stringValue: String?
         get() = traitValue as? String
 
     val intValue: Int?
-        get()  {
+        get() {
             return when (traitValue) {
                 is Int -> traitValue
                 is Double -> traitValue.toInt()

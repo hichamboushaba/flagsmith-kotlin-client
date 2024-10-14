@@ -1,19 +1,24 @@
 package com.flagsmith.entities
 
-import com.google.gson.annotations.SerializedName
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 
+@Serializable
 data class Flag(
     val feature: Feature,
-    @SerializedName(value = "feature_state_value") val featureStateValue: Any?,
+    @SerialName(value = "feature_state_value")
+    @Serializable(with = DynamicValueDeserializer::class)
+    val featureStateValue: Any?,
     val enabled: Boolean
 )
 
+@Serializable
 data class Feature(
     val id: Long,
     val name: String,
-    @SerializedName(value = "created_date") val createdDate: String,
-    val description: String,
-    @SerializedName(value = "initial_value") val initialValue: String,
-    @SerializedName(value = "default_enabled") val defaultEnabled: Boolean,
+    @SerialName(value = "created_date") val createdDate: String? = null,
+    val description: String? = null,
+    @SerialName(value = "initial_value") val initialValue: String? = null,
+    @SerialName(value = "default_enabled") val defaultEnabled: Boolean? = null,
     val type: String
 )
