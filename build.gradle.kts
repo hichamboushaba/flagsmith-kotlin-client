@@ -1,7 +1,7 @@
 plugins {
     alias(libs.plugins.androidGradleApplication) apply false
     alias(libs.plugins.androidGradleLibrary) apply false
-    alias(libs.plugins.kotlin.android) apply false
+    alias(libs.plugins.kotlin.multiplatform) apply false
     alias(libs.plugins.kover) apply false
 }
 

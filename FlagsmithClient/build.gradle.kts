@@ -10,7 +10,7 @@ import java.util.Date
 plugins {
     alias(libs.plugins.androidGradleLibrary)
     alias(libs.plugins.kover)
-    kotlin("android")
+    alias(libs.plugins.kotlin.multiplatform)
     id("maven-publish")
 }
 
@@ -24,6 +24,44 @@ val versionNumber: String by lazy {
     }
     val version = stdout.toString().trim().replace("v", "")
     return@lazy version.ifEmpty { "0.1.0" }
+}
+
+kotlin {
+    androidTarget {
+        compilations.all {
+            kotlinOptions {
+                jvmTarget = JavaVersion.VERSION_11.toString()
+            }
+        }
+    }
+
+    sourceSets {
+        val androidMain by getting {
+            dependencies {
+                implementation(libs.gson)
+                implementation(libs.kotlinx.coroutines.core)
+
+                // HTTP Client
+                implementation(libs.retrofit)
+                implementation(libs.converter.gson)
+
+                // Server Sent Events
+                implementation(libs.okhttp.sse)
+            }
+        }
+        val androidUnitTest by getting {
+            dependencies {
+                implementation(libs.okhttp.sse)
+
+                implementation(libs.junit)
+                implementation(libs.kotlinx.coroutines.test)
+                implementation(libs.mockserver.netty)
+
+                implementation(libs.awaitility.kotlin)
+                implementation(libs.mockito.kotlin)
+            }
+        }
+    }
 }
 
 android {
@@ -56,33 +94,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
-    }
 
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
-}
-
-dependencies {
-    implementation(libs.gson)
-    implementation(libs.kotlinx.coroutines.core)
-
-    // HTTP Client
-    implementation(libs.retrofit)
-    implementation(libs.converter.gson)
-
-    // Server Sent Events
-    implementation(libs.okhttp.sse)
-    testImplementation(libs.okhttp.sse)
-
-    testImplementation(libs.junit)
-    testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.mockserver.netty)
-
-    testImplementation(libs.awaitility.kotlin)
-    testImplementation(libs.mockito.kotlin)
 }
 
 kover {
@@ -186,16 +201,16 @@ fun String.contentLine(length: Int, extraPadding: String = "  ") =
 fun tableLine(length: Int, leading: String, trailing: String) =
     "─".repeat(length - 2).wrapWith(leading, trailing)
 
-publishing {
-    publications {
-        register<MavenPublication>("release") {
-            groupId = "com.flagsmith"
-            artifactId = "flagsmith-kotlin-android-client"
-            version = versionNumber
-
-            afterEvaluate {
-                from(components["release"])
-            }
-        }
-    }
-}
+//publishing {
+//    publications {
+//        register<MavenPublication>("release") {
+//            groupId = "com.flagsmith"
+//            artifactId = "flagsmith-kotlin-android-client"
+//            version = versionNumber
+//
+//            afterEvaluate {
+//                from(components["release"])
+//            }
+//        }
+//    }
+//}
