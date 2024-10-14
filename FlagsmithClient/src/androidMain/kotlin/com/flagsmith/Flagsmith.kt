@@ -4,9 +4,10 @@ import android.content.Context
 import android.util.Log
 import com.flagsmith.entities.*
 import com.flagsmith.internal.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.serialization.json.Json
-import okhttp3.Cache
+import kotlinx.coroutines.launch
 import java.io.IOException
 
 /**
@@ -21,7 +22,7 @@ import java.io.IOException
  * @property analyticsFlushPeriod The period in seconds between attempts by the Flagsmith SDK to push analytic events to the server
  * @constructor Create empty Flagsmith
  */
-class Flagsmith constructor(
+class Flagsmith internal constructor(
     private val environmentKey: String,
     private val baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
     private val eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
@@ -34,13 +35,9 @@ class Flagsmith constructor(
     private val requestTimeoutSeconds: Long = 4L,
     private val readTimeoutSeconds: Long = 6L,
     private val writeTimeoutSeconds: Long = 6L,
-    override var lastFlagFetchTime: Double = 0.0 // from FlagsmithEventTimeTracker
+    override var lastFlagFetchTime: Double = 0.0, // from FlagsmithEventTimeTracker
+    private val flagsmithApiFactory: FlagsmithApiFactory
 ) : FlagsmithEventTimeTracker {
-    private lateinit var retrofit: FlagsmithRetrofitService
-    private var cache: Cache? = null
-    private var lastUsedIdentity: String? = null
-    private var analytics: FlagsmithAnalytics? = null
-
     private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates) null else FlagsmithEventService(
         eventSourceBaseUrl = eventSourceBaseUrl,
         json = defaultJson,
@@ -52,7 +49,7 @@ class Flagsmith constructor(
             // Check whether this event is anything new
             if (lastEventUpdate > lastFlagFetchTime) {
                 // First evict the cache otherwise we'll be stuck with the old values
-                cache?.evictAll()
+                cache?.invalidate()
                 lastFlagFetchTime = lastEventUpdate
 
                 // Now we can get the new values, which will automatically be emitted to the flagUpdateFlow
@@ -70,6 +67,12 @@ class Flagsmith constructor(
         }
     }
 
+    private val flagSmithApi: FlagsmithApi
+    private val cache: HttpCache?
+    private val analytics: FlagsmithAnalytics?
+
+    private var lastUsedIdentity: String? = null
+
     // The last time we got an event from the SSE stream or via the API
     private var lastEventUpdate: Double = 0.0
 
@@ -80,20 +83,27 @@ class Flagsmith constructor(
         if (cacheConfig.enableCache && context == null) {
             throw IllegalArgumentException("Flagsmith requires a context to use the cache feature")
         }
-        val pair = FlagsmithRetrofitService.create<FlagsmithRetrofitService>(
-            baseUrl = baseUrl, environmentKey = environmentKey, context = context, cacheConfig = cacheConfig,
-            requestTimeoutSeconds = requestTimeoutSeconds, readTimeoutSeconds = readTimeoutSeconds,
-            writeTimeoutSeconds = writeTimeoutSeconds, timeTracker = this,
-            json = defaultJson, klass = FlagsmithRetrofitService::class.java
-        )
-        retrofit = pair.first
-        cache = pair.second
+        flagsmithApiFactory.create(
+            baseUrl = baseUrl,
+            environmentKey = environmentKey,
+            cacheConfig = cacheConfig,
+            requestTimeoutSeconds = requestTimeoutSeconds,
+            readTimeoutSeconds = readTimeoutSeconds,
+            writeTimeoutSeconds = writeTimeoutSeconds,
+            timeTracker = this,
+            json = defaultJson
+        ).let { (api, cache) ->
+            flagSmithApi = api
+            this.cache = cache
+        }
 
-        if (enableAnalytics) {
+        analytics = if (enableAnalytics) {
             if (context == null || context.applicationContext == null) {
                 throw IllegalArgumentException("Flagsmith requires a context to use the analytics feature")
             }
-            analytics = FlagsmithAnalytics(context, retrofit, analyticsFlushPeriod)
+            FlagsmithAnalytics(context, flagSmithApi, analyticsFlushPeriod)
+        } else {
+            null
         }
     }
 
@@ -102,79 +112,124 @@ class Flagsmith constructor(
         const val DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS = 10
     }
 
+    suspend fun getFeatureFlags(
+        identity: String? = null,
+        traits: List<Trait>? = null,
+        transient: Boolean = false
+    ): Result<List<Flag>> {
+        // Save the last used identity as we'll refresh with this if we get update events
+        lastUsedIdentity = identity
+
+        return if (identity != null) {
+            if (traits != null) {
+                flagSmithApi.postTraits(IdentityAndTraits(identity, traits, transient))
+                    .map { it.flags }
+                    .also { lastUsedIdentity = identity }
+            } else {
+                flagSmithApi.getIdentityFlagsAndTraits(identity, transient)
+                    .map { it.flags }
+                    .also { flagUpdateFlow.tryEmit(it.getOrNull() ?: emptyList()) }
+            }
+        } else {
+            if (traits != null) {
+                throw IllegalArgumentException("Cannot set traits without an identity");
+            } else {
+                flagSmithApi.getFlags()
+                    .recover { defaultFlags }
+                    .also { res ->
+                        flagUpdateFlow.tryEmit(res.getOrNull() ?: emptyList())
+                    }
+            }
+        }
+    }
+
     fun getFeatureFlags(
         identity: String? = null,
         traits: List<Trait>? = null,
         transient: Boolean = false,
         result: (Result<List<Flag>>) -> Unit
     ) {
-        // Save the last used identity as we'll refresh with this if we get update events
-        lastUsedIdentity = identity
-
-        if (identity != null) {
-            if (traits != null) {
-                retrofit.postTraits(IdentityAndTraits(identity, traits, transient)).enqueueWithResult(result = {
-                    result(it.map { response -> response.flags })
-                }).also { lastUsedIdentity = identity }
-            } else {
-                retrofit.getIdentityFlagsAndTraits(identity, transient).enqueueWithResult { res ->
-                    flagUpdateFlow.tryEmit(res.getOrNull()?.flags ?: emptyList())
-                    result(res.map { it.flags })
-                }
-            }
-        } else {
-            if (traits != null) {
-                throw IllegalArgumentException("Cannot set traits without an identity");
-            } else {
-                retrofit.getFlags().enqueueWithResult(defaults = defaultFlags) { res ->
-                    flagUpdateFlow.tryEmit(res.getOrNull() ?: emptyList())
-                    result(res)
-                }
-            }
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            result(getFeatureFlags(identity, traits, transient))
         }
+    }
+
+    suspend fun hasFeatureFlag(
+        featureId: String,
+        identity: String? = null
+    ): Result<Boolean> {
+        return getFeatureFlag(featureId, identity).map { flag -> flag != null }
     }
 
     fun hasFeatureFlag(
         featureId: String,
         identity: String? = null,
         result: (Result<Boolean>) -> Unit
-    ) = getFeatureFlag(featureId, identity) { res ->
-        result(res.map { flag -> flag != null })
+    ) {
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            result(hasFeatureFlag(featureId, identity))
+        }
     }
+
+    suspend fun getValueForFeature(
+        featureId: String,
+        identity: String? = null
+    ) = getFeatureFlag(featureId, identity).map { flag -> flag?.featureStateValue }
 
     fun getValueForFeature(
         featureId: String,
         identity: String? = null,
         result: (Result<Any?>) -> Unit
-    ) = getFeatureFlag(featureId, identity) { res ->
-        result(res.map { flag -> flag?.featureStateValue })
+    ) {
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            result(getValueForFeature(featureId, identity))
+        }
     }
 
-    fun getTrait(id: String, identity: String, result: (Result<Trait?>) -> Unit) =
-        retrofit.getIdentityFlagsAndTraits(identity).enqueueWithResult { res ->
-            result(res.map { value -> value.traits.find { it.key == id } })
-        }.also { lastUsedIdentity = identity }
+    suspend fun getTrait(id: String, identity: String): Result<Trait?> {
+        return flagSmithApi.getIdentityFlagsAndTraits(identity)
+            .map { value -> value.traits.find { it.key == id } }
+            .also { lastUsedIdentity = identity }
+    }
 
-    fun getTraits(identity: String, result: (Result<List<Trait>>) -> Unit) =
-        retrofit.getIdentityFlagsAndTraits(identity).enqueueWithResult { res ->
-            result(res.map { it.traits })
-        }.also { lastUsedIdentity = identity }
+    fun getTrait(id: String, identity: String, result: (Result<Trait?>) -> Unit) {
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            result(getTrait(id, identity))
+        }
+    }
 
-    fun setTrait(trait: Trait, identity: String, result: (Result<TraitWithIdentity>) -> Unit) =
-        retrofit.postTraits(IdentityAndTraits(identity, listOf(trait)))
-            .enqueueWithResult(result = {
-                result(it.map { response ->
-                    TraitWithIdentity(
-                        key = response.traits.first().key,
-                        traitValue = response.traits.first().traitValue,
-                        identity = Identity(identity)
-                    )
-                })
-            })
+    suspend fun getTraits(identity: String): Result<List<Trait>> {
+        return flagSmithApi.getIdentityFlagsAndTraits(identity)
+            .map { value -> value.traits }
+            .also { lastUsedIdentity = identity }
+    }
 
-    fun setTraits(traits: List<Trait>, identity: String, result: (Result<List<TraitWithIdentity>>) -> Unit) {
-        retrofit.postTraits(IdentityAndTraits(identity, traits)).enqueueWithResult(result = {
-            result(it.map { response ->
+    fun getTraits(identity: String, result: (Result<List<Trait>>) -> Unit) {
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            result(getTraits(identity))
+        }
+    }
+
+    suspend fun setTrait(trait: Trait, identity: String): Result<TraitWithIdentity> {
+        return flagSmithApi.postTraits(IdentityAndTraits(identity, listOf(trait)))
+            .map { response ->
+                TraitWithIdentity(
+                    key = response.traits.first().key,
+                    traitValue = response.traits.first().traitValue,
+                    identity = Identity(identity)
+                )
+            }
+    }
+
+    fun setTrait(trait: Trait, identity: String, result: (Result<TraitWithIdentity>) -> Unit) {
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            result(setTrait(trait, identity))
+        }
+    }
+
+    suspend fun setTraits(traits: List<Trait>, identity: String): Result<List<TraitWithIdentity>> {
+        return flagSmithApi.postTraits(IdentityAndTraits(identity, traits))
+            .map { response ->
                 response.traits.map { trait ->
                     TraitWithIdentity(
                         key = trait.key,
@@ -182,31 +237,39 @@ class Flagsmith constructor(
                         identity = Identity(identity)
                     )
                 }
-            })
-        })
+            }
     }
 
-    fun getIdentity(identity: String, transient: Boolean = false, result: (Result<IdentityFlagsAndTraits>) -> Unit) =
-        retrofit.getIdentityFlagsAndTraits(identity, transient).enqueueWithResult(defaults = null, result = result)
+    fun setTraits(traits: List<Trait>, identity: String, result: (Result<List<TraitWithIdentity>>) -> Unit) {
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            result(setTraits(traits, identity))
+        }
+    }
+
+    suspend fun getIdentity(identity: String, transient: Boolean = false): Result<IdentityFlagsAndTraits> =
+        flagSmithApi.getIdentityFlagsAndTraits(identity, transient)
             .also { lastUsedIdentity = identity }
+
+    fun getIdentity(identity: String, transient: Boolean = false, result: (Result<IdentityFlagsAndTraits>) -> Unit) {
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            result(getIdentity(identity, transient))
+        }
+    }
 
     fun clearCache() {
         try {
-            cache?.evictAll()
+            cache?.invalidate()
         } catch (e: IOException) {
             Log.e("Flagsmith", "Error clearing cache", e)
         }
     }
 
-    private fun getFeatureFlag(
+    private suspend fun getFeatureFlag(
         featureId: String,
         identity: String?,
-        result: (Result<Flag?>) -> Unit
-    ) = getFeatureFlags(identity) { res ->
-        result(res.map { flags ->
-            val foundFlag = flags.find { flag -> flag.feature.name == featureId && flag.enabled }
-            analytics?.trackEvent(featureId)
-            foundFlag
-        })
+    ) = getFeatureFlags(identity).map { flags ->
+        val foundFlag = flags.find { flag -> flag.feature.name == featureId && flag.enabled }
+        analytics?.trackEvent(featureId)
+        foundFlag
     }.also { lastUsedIdentity = identity }
 }

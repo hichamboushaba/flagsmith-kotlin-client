@@ -5,12 +5,13 @@ import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import kotlinx.coroutines.runBlocking
 import org.json.JSONException
 import org.json.JSONObject
 
-class FlagsmithAnalytics constructor(
+internal class FlagsmithAnalytics(
     private val context: Context,
-    private val retrofitService: FlagsmithRetrofitService,
+    private val flagsmithApi: FlagsmithApi,
     private val flushPeriod: Int
 ) {
     private val applicationContext: Context = context.applicationContext
@@ -20,14 +21,16 @@ class FlagsmithAnalytics constructor(
     private val timerRunnable = object : Runnable {
         override fun run() {
             if (currentEvents.isNotEmpty()) {
-                retrofitService.postAnalytics(currentEvents).enqueueWithResult { result ->
-                    result.onSuccess { resetMap() }
-                        .onFailure { err ->
-                            Log.e(
-                                "FLAGSMITH",
-                                "Failed posting analytics - ${err.localizedMessage}"
-                            )
-                        }
+                runBlocking {
+                    flagsmithApi.postAnalytics(currentEvents).let { result ->
+                        result.onSuccess { resetMap() }
+                            .onFailure { err ->
+                                Log.e(
+                                    "FLAGSMITH",
+                                    "Failed posting analytics - ${err.localizedMessage}"
+                                )
+                            }
+                    }
                 }
             }
             timerHandler.postDelayed(this, flushPeriod.toLong() * 1000)
