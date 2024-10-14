@@ -8,9 +8,9 @@ import java.io.ByteArrayOutputStream
 import java.util.Date
 
 plugins {
-    id("com.android.library")
+    alias(libs.plugins.androidGradleLibrary)
+    alias(libs.plugins.kover)
     kotlin("android")
-    id("org.jetbrains.kotlinx.kover")
     id("maven-publish")
 }
 
@@ -67,23 +67,23 @@ android {
 }
 
 dependencies {
-    implementation("com.google.code.gson:gson:2.10")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
+    implementation(libs.gson)
+    implementation(libs.kotlinx.coroutines.core)
 
     // HTTP Client
-    implementation("com.squareup.retrofit2:retrofit:2.9.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    implementation(libs.retrofit)
+    implementation(libs.converter.gson)
 
     // Server Sent Events
-    implementation("com.squareup.okhttp3:okhttp-sse:4.11.0")
-    testImplementation("com.squareup.okhttp3:okhttp-sse:4.11.0")
+    implementation(libs.okhttp.sse)
+    testImplementation(libs.okhttp.sse)
 
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.6.4")
-    testImplementation("org.mock-server:mockserver-netty-no-dependencies:5.14.0")
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.mockserver.netty)
 
-    testImplementation("org.awaitility:awaitility-kotlin:4.2.0")
-    testImplementation("org.mockito.kotlin:mockito-kotlin:5.0.0")
+    testImplementation(libs.awaitility.kotlin)
+    testImplementation(libs.mockito.kotlin)
 }
 
 kover {

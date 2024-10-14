@@ -1,0 +1,28 @@
+[versions]
+kotlin = "1.8.0"
+awaitilityKotlin = "4.2.0"
+gson = "2.10"
+junit = "4.13.2"
+coroutines = "1.6.4"
+mockitoKotlin = "5.0.0"
+mockserverNetty = "5.14.0"
+okhttpSse = "4.11.0"
+retrofit = "2.9.0"
+
+[libraries]
+awaitility-kotlin = { module = "org.awaitility:awaitility-kotlin", version.ref = "awaitilityKotlin" }
+converter-gson = { module = "com.squareup.retrofit2:converter-gson", version.ref = "retrofit" }
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+junit = { module = "junit:junit", version.ref = "junit" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+mockito-kotlin = { module = "org.mockito.kotlin:mockito-kotlin", version.ref = "mockitoKotlin" }
+mockserver-netty = { module = "org.mock-server:mockserver-netty-no-dependencies", version.ref = "mockserverNetty" }
+okhttp-sse = { module = "com.squareup.okhttp3:okhttp-sse", version.ref = "okhttpSse" }
+retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
+
+[plugins]
+androidGradleApplication = { id = "com.android.application", version = "7.3.1" }
+androidGradleLibrary = { id = "com.android.library", version = "7.3.1" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kover = { id = "org.jetbrains.kotlinx.kover", version = "0.6.1" }
