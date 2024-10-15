@@ -66,7 +66,7 @@ internal class RetrofitFlagsmithApi(private val service: FlagsmithRetrofitServic
         }
     }
 
-    companion object : FlagsmithApiFactory {
+    companion object : FlagsmithApi.Factory {
         private const val UPDATED_AT_HEADER = "x-flagsmith-document-updated-at"
         private const val ACCEPT_HEADER_VALUE = "application/json"
         private const val CONTENT_TYPE_HEADER_VALUE = "application/json; charset=utf-8"

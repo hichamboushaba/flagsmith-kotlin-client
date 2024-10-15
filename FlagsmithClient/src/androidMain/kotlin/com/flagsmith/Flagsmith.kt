@@ -37,8 +37,8 @@ class Flagsmith internal constructor(
     private val writeTimeoutSeconds: Long = 6L,
     override var lastFlagFetchTime: Double = 0.0, // from FlagsmithEventTimeTracker
     private val sseUpdatesScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
-    flagsmithApiFactory: FlagsmithApiFactory,
-    flagsmithEventApiFactory: FlagsmithEventApiFactory
+    flagsmithApiFactory: FlagsmithApi.Factory,
+    flagsmithEventApiFactory: FlagsmithEventApi.Factory
 ) : FlagsmithEventTimeTracker {
     private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates) null else FlagsmithEventService(
         eventSourceBaseUrl = eventSourceBaseUrl,

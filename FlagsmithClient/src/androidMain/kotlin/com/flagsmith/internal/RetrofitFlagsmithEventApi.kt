@@ -70,7 +70,7 @@ internal class RetrofitFlagsmithEventApi(
         }
     }
 
-    companion object : FlagsmithEventApiFactory {
+    companion object : FlagsmithEventApi.Factory {
         override fun create(sseUrl: String, environmentKey: String): FlagsmithEventApi {
             return RetrofitFlagsmithEventApi(sseUrl, environmentKey)
         }

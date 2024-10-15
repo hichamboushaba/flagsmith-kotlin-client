@@ -1,8 +1,10 @@
 package com.flagsmith.internal
 
+import com.flagsmith.FlagsmithCacheConfig
 import com.flagsmith.entities.Flag
 import com.flagsmith.entities.IdentityAndTraits
 import com.flagsmith.entities.IdentityFlagsAndTraits
+import kotlinx.serialization.json.Json
 
 internal interface FlagsmithApi {
     suspend fun getIdentityFlagsAndTraits(
@@ -15,4 +17,17 @@ internal interface FlagsmithApi {
     suspend fun postTraits(identity: IdentityAndTraits) : Result<IdentityFlagsAndTraits>
 
     suspend fun postAnalytics(eventMap: Map<String, Int?>) : Result<Unit>
+
+    interface Factory {
+        fun create(
+            baseUrl: String,
+            environmentKey: String,
+            cacheConfig: FlagsmithCacheConfig,
+            requestTimeoutSeconds: Long,
+            readTimeoutSeconds: Long,
+            writeTimeoutSeconds: Long,
+            timeTracker: FlagsmithEventTimeTracker,
+            json: Json
+        ): Pair<FlagsmithApi, HttpCache?>
+    }
 }
