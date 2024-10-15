@@ -4,10 +4,10 @@ import android.content.Context
 import android.util.Log
 import com.flagsmith.entities.*
 import com.flagsmith.internal.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import java.io.IOException
 
 /**
@@ -36,36 +36,16 @@ class Flagsmith internal constructor(
     private val readTimeoutSeconds: Long = 6L,
     private val writeTimeoutSeconds: Long = 6L,
     override var lastFlagFetchTime: Double = 0.0, // from FlagsmithEventTimeTracker
-    private val flagsmithApiFactory: FlagsmithApiFactory
+    private val sseUpdatesScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
+    flagsmithApiFactory: FlagsmithApiFactory,
+    flagsmithEventApiFactory: FlagsmithEventApiFactory
 ) : FlagsmithEventTimeTracker {
     private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates) null else FlagsmithEventService(
         eventSourceBaseUrl = eventSourceBaseUrl,
-        json = defaultJson,
+        flagsmithEventApiFactory = flagsmithEventApiFactory,
         environmentKey = environmentKey
-    ) { event ->
-        if (event.isSuccess) {
-            lastEventUpdate = event.getOrNull()?.updatedAt ?: lastEventUpdate
-
-            // Check whether this event is anything new
-            if (lastEventUpdate > lastFlagFetchTime) {
-                // First evict the cache otherwise we'll be stuck with the old values
-                cache?.invalidate()
-                lastFlagFetchTime = lastEventUpdate
-
-                // Now we can get the new values, which will automatically be emitted to the flagUpdateFlow
-                getFeatureFlags(lastUsedIdentity) { res ->
-                    if (res.isFailure) {
-                        Log.e(
-                            "Flagsmith",
-                            "Error getting flags in SSE stream: ${res.exceptionOrNull()}"
-                        )
-                    } else {
-                        Log.i("Flagsmith", "Got flags due to SSE event: $event")
-                    }
-                }
-            }
-        }
-    }
+    )
+    private var sseUpdatesJob: Job? = null
 
     private val flagSmithApi: FlagsmithApi
     private val cache: HttpCache?
@@ -105,6 +85,8 @@ class Flagsmith internal constructor(
         } else {
             null
         }
+
+        sseUpdatesJob = eventService?.subscribeToEvents()
     }
 
     companion object {
@@ -264,6 +246,23 @@ class Flagsmith internal constructor(
         }
     }
 
+    fun reStartRealtimeUpdates() {
+        if (!enableRealtimeUpdates) {
+            error("Real-time updates are not enabled for this instance")
+        }
+        if (!sseUpdatesScope.isActive) {
+            error("The SSE updates scope has been canceled")
+        }
+        sseUpdatesJob = eventService?.subscribeToEvents()
+    }
+
+    /**
+     * Used to stop real-time updates, to restart call [reStartRealtimeUpdates]
+     */
+    fun close() {
+        sseUpdatesJob?.cancel()
+    }
+
     private suspend fun getFeatureFlag(
         featureId: String,
         identity: String?,
@@ -272,4 +271,29 @@ class Flagsmith internal constructor(
         analytics?.trackEvent(featureId)
         foundFlag
     }.also { lastUsedIdentity = identity }
+
+    private fun FlagsmithEventService.subscribeToEvents() = sseEventsFlow
+        .onEach { event ->
+            lastEventUpdate = event.updatedAt ?: lastEventUpdate
+
+            // Check whether this event is anything new
+            if (lastEventUpdate > lastFlagFetchTime) {
+                // First evict the cache otherwise we'll be stuck with the old values
+                cache?.invalidate()
+                lastFlagFetchTime = lastEventUpdate
+
+                // Now we can get the new values, which will automatically be emitted to the flagUpdateFlow
+                getFeatureFlags(lastUsedIdentity) { res ->
+                    if (res.isFailure) {
+                        Log.e(
+                            "Flagsmith",
+                            "Error getting flags in SSE stream: ${res.exceptionOrNull()}"
+                        )
+                    } else {
+                        Log.i("Flagsmith", "Got flags due to SSE event: $event")
+                    }
+                }
+            }
+        }
+        .launchIn(sseUpdatesScope)
 }
