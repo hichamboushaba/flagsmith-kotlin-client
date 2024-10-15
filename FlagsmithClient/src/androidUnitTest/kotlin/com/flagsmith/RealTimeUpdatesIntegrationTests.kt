@@ -54,12 +54,11 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
 
         // We need the cache configured in the integration tests, otherwise we'd be getting
         // the new values from the server all the time rather than seeing the values from the realtime update stream
-        flagsmith = Flagsmith(
+        flagsmith = Flagsmith.create(
             environmentKey = environmentKey!!,
             enableAnalytics = false,
             cacheConfig = FlagsmithCacheConfig(enableCache = true),
-            enableRealtimeUpdates = true,
-            context = mockApplicationContext,
+            enableRealtimeUpdates = true
         )
 
         val requestTimeoutSeconds: Long = 4L
@@ -70,7 +69,8 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
             baseUrl = "https://api.flagsmith.com/api/v1/", environmentKey = environmentKey, context = mockApplicationContext,
             cacheConfig = FlagsmithCacheConfig(enableCache = false),
             timeTracker = this, requestTimeoutSeconds = requestTimeoutSeconds, readTimeoutSeconds = readTimeoutSeconds,
-            writeTimeoutSeconds = writeTimeoutSeconds, json = defaultJson)
+            writeTimeoutSeconds = writeTimeoutSeconds, json = defaultJson
+        )
     }
 
     @After

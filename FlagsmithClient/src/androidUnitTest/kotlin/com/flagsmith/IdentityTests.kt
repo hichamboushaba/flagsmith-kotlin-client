@@ -1,13 +1,10 @@
 package com.flagsmith
 
-import com.flagsmith.entities.Trait
 import com.flagsmith.mockResponses.MockEndpoint
-import com.flagsmith.mockResponses.MockResponses
 import com.flagsmith.mockResponses.mockResponseFor
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -22,7 +19,7 @@ class IdentityTests {
     @Before
     fun setup() {
         mockServer = ClientAndServer.startClientAndServer()
-        flagsmith = Flagsmith(
+        flagsmith = Flagsmith.create(
             environmentKey = "",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,

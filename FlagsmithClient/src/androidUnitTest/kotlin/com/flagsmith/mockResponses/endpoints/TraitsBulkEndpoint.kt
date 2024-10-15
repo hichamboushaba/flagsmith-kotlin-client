@@ -5,7 +5,6 @@ import com.flagsmith.entities.IdentityAndTraits
 import com.flagsmith.entities.Trait
 import com.flagsmith.entities.TraitWithIdentity
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 
 data class TraitsBulkEndpoint(private val traits: List<Trait>, private val identity: String) :
     PostEndpoint<TraitWithIdentity>(

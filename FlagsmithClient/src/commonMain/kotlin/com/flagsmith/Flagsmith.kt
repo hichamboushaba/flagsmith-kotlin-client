@@ -1,13 +1,11 @@
 package com.flagsmith
 
-import android.util.Log
 import com.flagsmith.entities.*
 import com.flagsmith.internal.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
-import java.io.IOException
 
 /**
  * Flagsmith
@@ -39,40 +37,6 @@ class Flagsmith internal constructor(
     flagsmithAnalyticsFactory: FlagsmithAnalytics.Factory?,
     analyticsStorage: FlagsmithAnalytics.Storage?
 ) : FlagsmithEventTimeTracker {
-    constructor(
-        environmentKey: String,
-        baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
-        eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
-        enableAnalytics: Boolean = DEFAULT_ENABLE_ANALYTICS,
-        enableRealtimeUpdates: Boolean = false,
-        analyticsFlushPeriod: Int = DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS,
-        cacheConfig: FlagsmithCacheConfig = FlagsmithCacheConfig(),
-        defaultFlags: List<Flag> = emptyList(),
-        requestTimeoutSeconds: Long = 4L,
-        readTimeoutSeconds: Long = 6L,
-        writeTimeoutSeconds: Long = 6L,
-        lastFlagFetchTime: Double = 0.0, // from FlagsmithEventTimeTracker
-        sseUpdatesScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
-    ): this(
-        environmentKey = environmentKey,
-        baseUrl = baseUrl,
-        eventSourceBaseUrl = eventSourceBaseUrl,
-        enableAnalytics = enableAnalytics,
-        enableRealtimeUpdates = enableRealtimeUpdates,
-        analyticsFlushPeriod = analyticsFlushPeriod,
-        cacheConfig = cacheConfig,
-        defaultFlags = defaultFlags,
-        requestTimeoutSeconds = requestTimeoutSeconds,
-        readTimeoutSeconds = readTimeoutSeconds,
-        writeTimeoutSeconds = writeTimeoutSeconds,
-        lastFlagFetchTime = lastFlagFetchTime,
-        sseUpdatesScope = sseUpdatesScope,
-        flagsmithApiFactory = RetrofitFlagsmithApi.Companion,
-        flagsmithEventApiFactory = RetrofitFlagsmithEventApi.Companion,
-        flagsmithAnalyticsFactory = null,
-        analyticsStorage = null
-    )
-
     private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates) null else FlagsmithEventService(
         eventSourceBaseUrl = eventSourceBaseUrl,
         flagsmithEventApiFactory = flagsmithEventApiFactory,
@@ -108,11 +72,11 @@ class Flagsmith internal constructor(
         }
 
         analytics = if (enableAnalytics) {
-            if (flagsmithAnalyticsFactory == null) {
-                error("Analytics is enabled but no analytics factory was provided")
+            requireNotNull(flagsmithAnalyticsFactory) {
+                "Analytics is enabled but no analytics factory was provided"
             }
-            if (analyticsStorage == null) {
-                error("Analytics is enabled but no analytics storage was provided")
+            requireNotNull(analyticsStorage) {
+                "Analytics is enabled but no analytics storage was provided"
             }
             flagsmithAnalyticsFactory.create(analyticsStorage, flagSmithApi, analyticsFlushPeriod)
         } else {
@@ -274,8 +238,8 @@ class Flagsmith internal constructor(
     fun clearCache() {
         try {
             cache?.invalidate()
-        } catch (e: IOException) {
-            Log.e("Flagsmith", "Error clearing cache", e)
+        } catch (e: Exception) {
+//            Log.e("Flagsmith", "Error clearing cache", e)
         }
     }
 
@@ -318,12 +282,12 @@ class Flagsmith internal constructor(
                 // Now we can get the new values, which will automatically be emitted to the flagUpdateFlow
                 getFeatureFlags(lastUsedIdentity) { res ->
                     if (res.isFailure) {
-                        Log.e(
-                            "Flagsmith",
-                            "Error getting flags in SSE stream: ${res.exceptionOrNull()}"
-                        )
+//                        Log.e(
+//                            "Flagsmith",
+//                            "Error getting flags in SSE stream: ${res.exceptionOrNull()}"
+//                        )
                     } else {
-                        Log.i("Flagsmith", "Got flags due to SSE event: $event")
+//                        Log.i("Flagsmith", "Got flags due to SSE event: $event")
                     }
                 }
             }

@@ -27,7 +27,7 @@ class FeatureFlagTests {
     @Before
     fun setup() {
         mockServer = ClientAndServer.startClientAndServer()
-        flagsmith = Flagsmith(
+        flagsmith = Flagsmith.create(
             environmentKey = "",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,
@@ -141,13 +141,13 @@ class FeatureFlagTests {
     @Test
     fun testThrowsExceptionWhenCreatingAnalyticsWithoutAContext() {
         val exception = assertThrows(IllegalArgumentException::class.java) {
-            flagsmith = Flagsmith(
+            flagsmith = Flagsmith.create(
                 environmentKey = "",
                 baseUrl = "http://localhost:${mockServer.localPort}",
                 enableAnalytics = true
             )
         }
-        assertEquals("Flagsmith requires a context to use the analytics feature", exception.message)
+        assertEquals("Analytics is enabled but no analytics factory was provided", exception.message)
     }
 
     @Test

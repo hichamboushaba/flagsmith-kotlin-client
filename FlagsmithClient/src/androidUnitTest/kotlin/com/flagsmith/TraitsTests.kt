@@ -20,7 +20,7 @@ class TraitsTests {
     @Before
     fun setup() {
         mockServer = ClientAndServer.startClientAndServer()
-        flagsmith = Flagsmith(
+        flagsmith = Flagsmith.create(
             environmentKey = "",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,

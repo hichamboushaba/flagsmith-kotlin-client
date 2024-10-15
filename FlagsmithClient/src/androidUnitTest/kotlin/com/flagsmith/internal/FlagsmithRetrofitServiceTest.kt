@@ -4,7 +4,6 @@ import android.content.Context
 import com.flagsmith.FlagsmithCacheConfig
 import com.flagsmith.entities.FeatureStatePutBody
 import kotlinx.serialization.json.Json
-import okhttp3.Cache
 import retrofit2.Call
 import retrofit2.http.Body
 import retrofit2.http.GET
