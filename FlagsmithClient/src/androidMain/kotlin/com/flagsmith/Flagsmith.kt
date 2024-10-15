@@ -1,6 +1,5 @@
 package com.flagsmith
 
-import android.content.Context
 import android.util.Log
 import com.flagsmith.entities.*
 import com.flagsmith.internal.*
@@ -17,7 +16,6 @@ import java.io.IOException
  *
  * @property environmentKey Take this API key from the Flagsmith dashboard and pass here
  * @property baseUrl By default we'll connect to the Flagsmith backend, but if you self-host you can configure here
- * @property context The current context is required to use the Flagsmith Analytics functionality
  * @property enableAnalytics Enable analytics - default true
  * @property analyticsFlushPeriod The period in seconds between attempts by the Flagsmith SDK to push analytic events to the server
  * @constructor Create empty Flagsmith
@@ -26,7 +24,6 @@ class Flagsmith internal constructor(
     private val environmentKey: String,
     private val baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
     private val eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
-    private val context: Context? = null,
     private val enableAnalytics: Boolean = DEFAULT_ENABLE_ANALYTICS,
     private val enableRealtimeUpdates: Boolean = false,
     private val analyticsFlushPeriod: Int = DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS,
@@ -38,13 +35,14 @@ class Flagsmith internal constructor(
     override var lastFlagFetchTime: Double = 0.0, // from FlagsmithEventTimeTracker
     private val sseUpdatesScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
     flagsmithApiFactory: FlagsmithApi.Factory,
-    flagsmithEventApiFactory: FlagsmithEventApi.Factory
+    flagsmithEventApiFactory: FlagsmithEventApi.Factory,
+    flagsmithAnalyticsFactory: FlagsmithAnalytics.Factory?,
+    analyticsStorage: FlagsmithAnalytics.Storage?
 ) : FlagsmithEventTimeTracker {
     constructor(
         environmentKey: String,
         baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
         eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
-        context: Context? = null,
         enableAnalytics: Boolean = DEFAULT_ENABLE_ANALYTICS,
         enableRealtimeUpdates: Boolean = false,
         analyticsFlushPeriod: Int = DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS,
@@ -59,7 +57,6 @@ class Flagsmith internal constructor(
         environmentKey = environmentKey,
         baseUrl = baseUrl,
         eventSourceBaseUrl = eventSourceBaseUrl,
-        context = context,
         enableAnalytics = enableAnalytics,
         enableRealtimeUpdates = enableRealtimeUpdates,
         analyticsFlushPeriod = analyticsFlushPeriod,
@@ -71,7 +68,9 @@ class Flagsmith internal constructor(
         lastFlagFetchTime = lastFlagFetchTime,
         sseUpdatesScope = sseUpdatesScope,
         flagsmithApiFactory = RetrofitFlagsmithApi.Companion,
-        flagsmithEventApiFactory = RetrofitFlagsmithEventApi.Companion
+        flagsmithEventApiFactory = RetrofitFlagsmithEventApi.Companion,
+        flagsmithAnalyticsFactory = null,
+        analyticsStorage = null
     )
 
     private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates) null else FlagsmithEventService(
@@ -94,9 +93,6 @@ class Flagsmith internal constructor(
     val flagUpdateFlow = MutableStateFlow<List<Flag>>(listOf())
 
     init {
-        if (cacheConfig.enableCache && context == null) {
-            throw IllegalArgumentException("Flagsmith requires a context to use the cache feature")
-        }
         flagsmithApiFactory.create(
             baseUrl = baseUrl,
             environmentKey = environmentKey,
@@ -112,10 +108,13 @@ class Flagsmith internal constructor(
         }
 
         analytics = if (enableAnalytics) {
-            if (context == null || context.applicationContext == null) {
-                throw IllegalArgumentException("Flagsmith requires a context to use the analytics feature")
+            if (flagsmithAnalyticsFactory == null) {
+                error("Analytics is enabled but no analytics factory was provided")
             }
-            FlagsmithAnalytics(context, flagSmithApi, analyticsFlushPeriod)
+            if (analyticsStorage == null) {
+                error("Analytics is enabled but no analytics storage was provided")
+            }
+            flagsmithAnalyticsFactory.create(analyticsStorage, flagSmithApi, analyticsFlushPeriod)
         } else {
             null
         }
