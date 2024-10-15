@@ -40,6 +40,40 @@ class Flagsmith internal constructor(
     flagsmithApiFactory: FlagsmithApi.Factory,
     flagsmithEventApiFactory: FlagsmithEventApi.Factory
 ) : FlagsmithEventTimeTracker {
+    constructor(
+        environmentKey: String,
+        baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
+        eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
+        context: Context? = null,
+        enableAnalytics: Boolean = DEFAULT_ENABLE_ANALYTICS,
+        enableRealtimeUpdates: Boolean = false,
+        analyticsFlushPeriod: Int = DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS,
+        cacheConfig: FlagsmithCacheConfig = FlagsmithCacheConfig(),
+        defaultFlags: List<Flag> = emptyList(),
+        requestTimeoutSeconds: Long = 4L,
+        readTimeoutSeconds: Long = 6L,
+        writeTimeoutSeconds: Long = 6L,
+        lastFlagFetchTime: Double = 0.0, // from FlagsmithEventTimeTracker
+        sseUpdatesScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
+    ): this(
+        environmentKey = environmentKey,
+        baseUrl = baseUrl,
+        eventSourceBaseUrl = eventSourceBaseUrl,
+        context = context,
+        enableAnalytics = enableAnalytics,
+        enableRealtimeUpdates = enableRealtimeUpdates,
+        analyticsFlushPeriod = analyticsFlushPeriod,
+        cacheConfig = cacheConfig,
+        defaultFlags = defaultFlags,
+        requestTimeoutSeconds = requestTimeoutSeconds,
+        readTimeoutSeconds = readTimeoutSeconds,
+        writeTimeoutSeconds = writeTimeoutSeconds,
+        lastFlagFetchTime = lastFlagFetchTime,
+        sseUpdatesScope = sseUpdatesScope,
+        flagsmithApiFactory = RetrofitFlagsmithApi.Companion,
+        flagsmithEventApiFactory = RetrofitFlagsmithEventApi.Companion
+    )
+
     private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates) null else FlagsmithEventService(
         eventSourceBaseUrl = eventSourceBaseUrl,
         flagsmithEventApiFactory = flagsmithEventApiFactory,

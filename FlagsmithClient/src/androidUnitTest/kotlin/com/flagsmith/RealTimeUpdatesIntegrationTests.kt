@@ -70,7 +70,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
             baseUrl = "https://api.flagsmith.com/api/v1/", environmentKey = environmentKey, context = mockApplicationContext,
             cacheConfig = FlagsmithCacheConfig(enableCache = false),
             timeTracker = this, requestTimeoutSeconds = requestTimeoutSeconds, readTimeoutSeconds = readTimeoutSeconds,
-            writeTimeoutSeconds = writeTimeoutSeconds, json = defaultJson, klass = FlagsmithRetrofitServiceTest::class.java).first
+            writeTimeoutSeconds = writeTimeoutSeconds, json = defaultJson)
     }
 
     @After

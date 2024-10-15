@@ -28,6 +28,7 @@ import java.io.File
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
 
+private const val CACHE_DIR = "cache"
 
 class FeatureFlagCachingTests {
     private lateinit var mockServer: ClientAndServer
@@ -80,7 +81,10 @@ class FeatureFlagCachingTests {
             enableAnalytics = true, // Mix up the analytics flag to test initialisation
             context = mockApplicationContext,
             defaultFlags = defaultFlags,
-            cacheConfig = FlagsmithCacheConfig(enableCache = true)
+            cacheConfig = FlagsmithCacheConfig(
+                enableCache = true,
+                cacheDirectoryPath = CACHE_DIR
+            )
         )
 
         flagsmithNoCache = Flagsmith(
@@ -99,7 +103,6 @@ class FeatureFlagCachingTests {
         `when`(mockApplicationContext.getSharedPreferences(anyString(), anyInt())).thenReturn(
             mockSharedPreferences
         )
-        `when`(mockApplicationContext.cacheDir).thenReturn(File("cache"))
 
         `when`(mockContextResources.getString(anyInt())).thenReturn("mocked string")
         `when`(mockContextResources.getStringArray(anyInt())).thenReturn(
@@ -127,7 +130,10 @@ class FeatureFlagCachingTests {
                 environmentKey = "",
                 baseUrl = "http://localhost:${mockServer.localPort}",
                 enableAnalytics = false,
-                cacheConfig = FlagsmithCacheConfig(enableCache = true),
+                cacheConfig = FlagsmithCacheConfig(
+                    enableCache = true,
+                    cacheDirectoryPath = CACHE_DIR
+                ),
             )
         }
         Assert.assertEquals(
@@ -320,13 +326,19 @@ class FeatureFlagCachingTests {
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,
             context = mockApplicationContext,
-            cacheConfig = FlagsmithCacheConfig(enableCache = true)
+            cacheConfig = FlagsmithCacheConfig(
+                enableCache = true,
+                cacheDirectoryPath = CACHE_DIR
+            )
         )
 
         // Now we mock the failure and expect the cached response to be returned from the new flagsmith instance
         var foundFromCache: Flag? = null
         newFlagsmithWithCache.getFeatureFlags(identity = "person") { result ->
-            Assert.assertTrue("The request will fail but we should be successful as we fall back on the cache", result.isSuccess)
+            Assert.assertTrue(
+                "The request will fail but we should be successful as we fall back on the cache",
+                result.isSuccess
+            )
 
             foundFromCache =
                 result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
@@ -362,7 +374,10 @@ class FeatureFlagCachingTests {
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,
             context = mockApplicationContext,
-            cacheConfig = FlagsmithCacheConfig(enableCache = true)
+            cacheConfig = FlagsmithCacheConfig(
+                enableCache = true,
+                cacheDirectoryPath = CACHE_DIR
+            )
         )
         newFlagsmithWithClearedCache.clearCache()
 
@@ -377,7 +392,7 @@ class FeatureFlagCachingTests {
             hasFinishedGetRequest.set(true)
         }
 
-        await untilTrue(hasFinishedGetRequest)
+        await untilTrue (hasFinishedGetRequest)
         Assert.assertNull("Shouldn't get any data back as we don't have a cache", foundFromCache)
     }
 }

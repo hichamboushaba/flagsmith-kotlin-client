@@ -13,7 +13,7 @@ import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 
-interface FlagsmithRetrofitServiceTest: FlagsmithRetrofitService {
+interface FlagsmithRetrofitServiceTest {
 
     @GET("environments/{environmentKey}/featurestates/{featureStateId}/")
     fun getFeatureStates(@Header("authorization") authToken:String,
@@ -30,7 +30,7 @@ interface FlagsmithRetrofitServiceTest: FlagsmithRetrofitService {
 
     @Suppress("UNCHECKED_CAST")
     companion object {
-        fun <T : FlagsmithRetrofitServiceTest> create(
+        fun create(
             baseUrl: String,
             environmentKey: String,
             context: Context?,
@@ -39,21 +39,20 @@ interface FlagsmithRetrofitServiceTest: FlagsmithRetrofitService {
             readTimeoutSeconds: Long,
             writeTimeoutSeconds: Long,
             timeTracker: FlagsmithEventTimeTracker,
-            json: Json,
-            klass: Class<T>
-        ): Pair<FlagsmithRetrofitServiceTest, Cache?> {
-            return FlagsmithRetrofitService.create(
+            json: Json
+        ): FlagsmithRetrofitServiceTest {
+            val (retrofit, _) = RetrofitBuilder.build(
                 baseUrl = baseUrl,
                 environmentKey = environmentKey,
-                context = context,
                 cacheConfig = cacheConfig,
                 requestTimeoutSeconds = requestTimeoutSeconds,
                 readTimeoutSeconds = readTimeoutSeconds,
                 writeTimeoutSeconds = writeTimeoutSeconds,
                 timeTracker = timeTracker,
-                json = json,
-                klass = klass
-            ) as Pair<FlagsmithRetrofitServiceTest, Cache?>
+                json = json
+            )
+
+            return retrofit.create(FlagsmithRetrofitServiceTest::class.java)
         }
     }
 }
