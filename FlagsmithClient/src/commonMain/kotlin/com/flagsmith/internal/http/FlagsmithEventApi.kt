@@ -1,4 +1,4 @@
-package com.flagsmith.internal
+package com.flagsmith.internal.http
 
 import com.flagsmith.entities.FlagEvent
 import kotlinx.coroutines.flow.Flow

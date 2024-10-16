@@ -2,10 +2,10 @@ package com.flagsmith
 
 import android.content.Context
 import com.flagsmith.entities.Flag
-import com.flagsmith.internal.AndroidAnalyticsStorage
-import com.flagsmith.internal.AndroidFlagsmithAnalytics
-import com.flagsmith.internal.RetrofitFlagsmithApi
-import com.flagsmith.internal.RetrofitFlagsmithEventApi
+import com.flagsmith.internal.http.AndroidAnalyticsStorage
+import com.flagsmith.internal.http.AndroidFlagsmithAnalytics
+import com.flagsmith.internal.http.RetrofitFlagsmithApi
+import com.flagsmith.internal.http.RetrofitFlagsmithEventApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 

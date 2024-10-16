@@ -1,8 +1,9 @@
-package com.flagsmith.internal
+package com.flagsmith.internal.http
 
 import android.util.Log
 import com.flagsmith.FlagsmithCacheConfig
-import com.flagsmith.internal.RetrofitFlagsmithApi.Companion.envKeyInterceptor
+import com.flagsmith.internal.FlagsmithEventTimeTracker
+import com.flagsmith.internal.http.RetrofitFlagsmithApi.Companion.envKeyInterceptor
 import kotlinx.serialization.json.Json
 import okhttp3.Cache
 import okhttp3.Interceptor

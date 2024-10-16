@@ -2,6 +2,9 @@ package com.flagsmith
 
 import com.flagsmith.entities.*
 import com.flagsmith.internal.*
+import com.flagsmith.internal.http.FlagsmithApi
+import com.flagsmith.internal.http.FlagsmithEventApi
+import com.flagsmith.internal.http.HttpCache
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.launchIn

@@ -1,5 +1,7 @@
 package com.flagsmith.internal
 
+import com.flagsmith.internal.http.FlagsmithApi
+
 internal interface FlagsmithAnalytics {
     fun trackEvent(flagName: String)
 

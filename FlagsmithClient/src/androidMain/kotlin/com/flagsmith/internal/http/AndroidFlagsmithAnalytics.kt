@@ -1,10 +1,11 @@
-package com.flagsmith.internal
+package com.flagsmith.internal.http
 
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.flagsmith.internal.FlagsmithAnalytics
 import kotlinx.coroutines.runBlocking
 import org.json.JSONException
 import org.json.JSONObject

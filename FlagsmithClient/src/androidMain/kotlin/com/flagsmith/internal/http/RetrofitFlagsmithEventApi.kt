@@ -1,4 +1,4 @@
-package com.flagsmith.internal
+package com.flagsmith.internal.http
 
 import android.util.Log
 import com.flagsmith.defaultJson

@@ -1,5 +1,7 @@
 package com.flagsmith.internal
 
+import com.flagsmith.internal.http.FlagsmithEventApi
+
 internal class FlagsmithEventService(
     eventSourceBaseUrl: String?,
     environmentKey: String,
