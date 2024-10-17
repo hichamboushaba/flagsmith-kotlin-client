@@ -10,6 +10,7 @@ import com.flagsmith.mockResponses.MockEndpoint
 import com.flagsmith.mockResponses.mockDelayFor
 import com.flagsmith.mockResponses.mockFailureFor
 import com.flagsmith.mockResponses.mockResponseFor
+import kotlinx.coroutines.runBlocking
 import org.awaitility.Awaitility
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilNotNull
@@ -288,7 +289,7 @@ class FeatureFlagCachingTests {
 
         // First time around we should be successful and cache the response
         var foundFromServer: Flag? = null
-        flagsmithWithCache.clearCache()
+        runBlocking { flagsmithWithCache.clearCache() }
         flagsmithWithCache.getFeatureFlags(identity = "person") { result ->
             Assert.assertTrue(result.isSuccess)
 
@@ -335,7 +336,7 @@ class FeatureFlagCachingTests {
 
         // First time around we should be successful and cache the response
         var foundFromServer: Flag? = null
-        flagsmithWithCache.clearCache()
+        runBlocking { flagsmithWithCache.clearCache() }
         flagsmithWithCache.getFeatureFlags(identity = "person") { result ->
             Assert.assertTrue(result.isSuccess)
 
@@ -357,7 +358,7 @@ class FeatureFlagCachingTests {
                 cacheDirectoryPath = CACHE_DIR
             )
         )
-        newFlagsmithWithClearedCache.clearCache()
+        runBlocking { newFlagsmithWithClearedCache.clearCache() }
 
         // Now we mock the failure and expect the get to fail as we don't have the cache to fall back on
         var foundFromCache: Flag? = null

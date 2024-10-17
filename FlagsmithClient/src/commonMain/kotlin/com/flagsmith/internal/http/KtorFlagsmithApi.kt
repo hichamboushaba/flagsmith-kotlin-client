@@ -122,7 +122,7 @@ internal class KtorFlagsmithApi(
 }
 
 private class KtorHttpCache(val storage: CacheStorage) : ClearableHttpCache {
-    override fun invalidate() {
+    override suspend fun invalidate() {
         // Ktor does not provide a way to invalidate the cache, TODO: check what can we do here
         error("Not implemented")
     }

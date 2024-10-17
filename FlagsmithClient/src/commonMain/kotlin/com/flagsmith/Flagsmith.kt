@@ -238,7 +238,7 @@ class Flagsmith internal constructor(
         }
     }
 
-    fun clearCache() {
+    suspend fun clearCache() {
         try {
             cache?.invalidate()
         } catch (e: Exception) {

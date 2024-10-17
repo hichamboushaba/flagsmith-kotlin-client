@@ -104,7 +104,7 @@ internal class RetrofitFlagsmithApi(private val service: FlagsmithRetrofitServic
 }
 
 private class RetrofitHttpCache(private val cache: Cache) : ClearableHttpCache {
-    override fun invalidate() {
+    override suspend fun invalidate() {
         cache.evictAll()
     }
 }
