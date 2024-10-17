@@ -3,7 +3,6 @@ package com.flagsmith.internal.http
 import io.ktor.client.plugins.cache.storage.*
 import io.ktor.http.*
 import io.ktor.util.*
-import io.ktor.util.collections.*
 import io.ktor.util.date.*
 import io.ktor.util.logging.*
 import kotlinx.coroutines.CoroutineDispatcher
@@ -24,13 +23,16 @@ private const val CACHE_DIRECTORY_NAME = "flagsmith"
  */
 internal class KtorFileCacheStorage(
     baseDirectory: Path,
+    private val maxSize: Long,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val logger: Logger = KtorSimpleLogger("KtorFileCacheStorage")
 ) : CacheStorage, ClearableHttpCache {
     private val directory = baseDirectory / CACHE_DIRECTORY_NAME
     private val fileSystem = FileSystem.SYSTEM
 
-    private val mutexes = ConcurrentMap<String, Mutex>()
+    // Ktor default implementation uses a mutex per file, but we use a common mutex for all files
+    // This is because we need to trim the cache to the specified size, and we can't do that with a mutex per file
+    private val mutex = Mutex()
 
     override suspend fun store(url: Url, data: CachedResponseData): Unit = withContext(dispatcher) {
         ensureDirExists()
@@ -53,7 +55,6 @@ internal class KtorFileCacheStorage(
     private fun key(url: Url) = hex(url.toString().encodeUtf8().md5().toByteArray())
 
     private suspend fun writeCache(urlHex: String, caches: List<CachedResponseData>) = withContext(dispatcher) {
-        val mutex = mutexes.computeIfAbsent(urlHex) { Mutex() }
         mutex.withLock {
             try {
                 fileSystem.sink(directory / urlHex).buffer().use { output ->
@@ -65,11 +66,12 @@ internal class KtorFileCacheStorage(
             } catch (cause: Exception) {
                 logger.trace("Exception during saving a cache to a file: ${cause.stackTraceToString()}")
             }
+
+            trimToSize()
         }
     }
 
     private suspend fun readCache(urlHex: String): Set<CachedResponseData> = withContext(dispatcher) {
-        val mutex = mutexes.computeIfAbsent(urlHex) { Mutex() }
         mutex.withLock {
             val path = directory / urlHex
             if (!fileSystem.exists(path)) return@withContext emptySet()
@@ -151,13 +153,34 @@ internal class KtorFileCacheStorage(
         )
     }
 
+
+    /**
+     * Trims the cache to the specified [maxSize] by deleting the oldest files first.
+     *
+     * Uses Okio's [FileSystem] to get the file size.
+     */
+    private suspend fun trimToSize() = withContext(dispatcher) {
+        val cacheFiles = fileSystem.list(directory).sortedByDescending { fileSystem.metadata(it).lastModifiedAtMillis }
+        var totalSize = 0L
+        for (file in cacheFiles) {
+            totalSize += fileSystem.metadata(file).size!!
+            if (totalSize > maxSize) {
+                try {
+                    fileSystem.delete(file)
+                } catch (cause: Exception) {
+                    logger.trace("Exception during cache trimming: ${cause.stackTraceToString()}")
+                }
+            }
+        }
+    }
+
     private fun ensureDirExists() {
         fileSystem.createDirectories(directory, mustCreate = false)
     }
 
     override suspend fun invalidate() {
         try {
-            fileSystem.delete(directory, false)
+            fileSystem.deleteRecursively(directory, false)
         } catch (e: IOException) {
             logger.error("Failed to clear cache", e)
         }

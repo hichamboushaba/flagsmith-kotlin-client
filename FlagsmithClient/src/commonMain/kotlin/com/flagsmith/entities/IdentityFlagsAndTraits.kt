@@ -4,6 +4,6 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class IdentityFlagsAndTraits(
-    val flags: ArrayList<Flag>,
-    val traits: ArrayList<Trait>
+    val flags: List<Flag>,
+    val traits: List<Trait>
 )

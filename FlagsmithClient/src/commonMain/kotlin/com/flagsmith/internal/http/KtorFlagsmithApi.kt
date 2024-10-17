@@ -67,7 +67,7 @@ internal class KtorFlagsmithApi(
             json: Json
         ): Pair<FlagsmithApi, ClearableHttpCache?> {
             val cache = if (cacheConfig.enableCache) {
-                KtorFileCacheStorage(cacheConfig.cacheDirectoryPath.toPath())
+                KtorFileCacheStorage(cacheConfig.cacheDirectoryPath.toPath(), cacheConfig.cacheSize)
             } else null
 
             val httpClient = HttpClient {

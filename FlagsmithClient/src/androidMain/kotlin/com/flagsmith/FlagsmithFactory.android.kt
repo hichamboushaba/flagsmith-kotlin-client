@@ -2,8 +2,10 @@ package com.flagsmith
 
 import android.content.Context
 import com.flagsmith.entities.Flag
+import com.flagsmith.internal.http.*
 import com.flagsmith.internal.http.AndroidAnalyticsStorage
 import com.flagsmith.internal.http.AndroidFlagsmithAnalytics
+import com.flagsmith.internal.http.KtorFlagsmithApi
 import com.flagsmith.internal.http.RetrofitFlagsmithApi
 import com.flagsmith.internal.http.RetrofitFlagsmithEventApi
 import kotlinx.coroutines.CoroutineScope
@@ -37,7 +39,7 @@ actual fun Flagsmith.Companion.create(
     writeTimeoutSeconds = writeTimeoutSeconds,
     lastFlagFetchTime = lastFlagFetchTime,
     sseUpdatesScope = sseUpdatesScope,
-    flagsmithApiFactory = RetrofitFlagsmithApi.Companion,
+    flagsmithApiFactory = KtorFlagsmithApi.Companion,
     flagsmithEventApiFactory = RetrofitFlagsmithEventApi.Companion,
     flagsmithAnalyticsFactory = null,
     analyticsStorage = null
@@ -72,7 +74,7 @@ fun Flagsmith.Companion.create(
     writeTimeoutSeconds = writeTimeoutSeconds,
     lastFlagFetchTime = lastFlagFetchTime,
     sseUpdatesScope = sseUpdatesScope,
-    flagsmithApiFactory = RetrofitFlagsmithApi.Companion,
+    flagsmithApiFactory = KtorFlagsmithApi.Companion,
     flagsmithEventApiFactory = RetrofitFlagsmithEventApi.Companion,
     flagsmithAnalyticsFactory = AndroidFlagsmithAnalytics.Companion,
     analyticsStorage = AndroidAnalyticsStorage(context)

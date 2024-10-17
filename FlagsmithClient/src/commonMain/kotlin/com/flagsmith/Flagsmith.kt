@@ -36,15 +36,19 @@ class Flagsmith internal constructor(
     override var lastFlagFetchTime: Double = 0.0, // from FlagsmithEventTimeTracker
     private val sseUpdatesScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
     flagsmithApiFactory: FlagsmithApi.Factory,
-    flagsmithEventApiFactory: FlagsmithEventApi.Factory,
+    flagsmithEventApiFactory: FlagsmithEventApi.Factory?,
     flagsmithAnalyticsFactory: FlagsmithAnalytics.Factory?,
     analyticsStorage: FlagsmithAnalytics.Storage?
 ) : FlagsmithEventTimeTracker {
-    private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates) null else FlagsmithEventService(
-        eventSourceBaseUrl = eventSourceBaseUrl,
-        flagsmithEventApiFactory = flagsmithEventApiFactory,
-        environmentKey = environmentKey
-    )
+    private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates || flagsmithEventApiFactory == null) {
+        null
+    } else {
+        FlagsmithEventService(
+            eventSourceBaseUrl = eventSourceBaseUrl,
+            flagsmithEventApiFactory = flagsmithEventApiFactory,
+            environmentKey = environmentKey
+        )
+    }
     private var sseUpdatesJob: Job? = null
 
     private val flagSmithApi: FlagsmithApi
@@ -60,6 +64,10 @@ class Flagsmith internal constructor(
     val flagUpdateFlow = MutableStateFlow<List<Flag>>(listOf())
 
     init {
+        if (enableRealtimeUpdates && flagsmithEventApiFactory == null) {
+            error("Real-time updates are enabled but no event API factory was provided")
+        }
+
         flagsmithApiFactory.create(
             baseUrl = baseUrl,
             environmentKey = environmentKey,

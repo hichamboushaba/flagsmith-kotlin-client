@@ -18,6 +18,7 @@ import org.mockserver.integration.ClientAndServer
 import org.mockserver.model.HttpRequest.request
 import org.mockserver.model.HttpResponse.response
 import org.mockserver.model.JsonBody.json
+import org.mockserver.model.MediaType
 
 class FeatureFlagTests {
 
@@ -195,6 +196,7 @@ class FeatureFlagTests {
             .respond(
                 response()
                     .withStatusCode(200)
+                    .withContentType(MediaType.APPLICATION_JSON)
                     .withBody(MockResponses.getTransientIdentities)
             )
 
@@ -232,6 +234,7 @@ class FeatureFlagTests {
             .respond(
                 response()
                     .withStatusCode(200)
+                    .withContentType(MediaType.APPLICATION_JSON)
                     .withBody(MockResponses.getTransientIdentities)
             )
 
