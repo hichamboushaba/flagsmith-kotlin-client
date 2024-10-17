@@ -54,7 +54,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
 
         // We need the cache configured in the integration tests, otherwise we'd be getting
         // the new values from the server all the time rather than seeing the values from the realtime update stream
-        flagsmith = Flagsmith.create(
+        flagsmith = Flagsmith(
             environmentKey = environmentKey!!,
             enableAnalytics = false,
             cacheConfig = FlagsmithCacheConfig(enableCache = true),

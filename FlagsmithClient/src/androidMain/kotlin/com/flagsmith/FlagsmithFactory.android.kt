@@ -3,15 +3,10 @@ package com.flagsmith
 import android.content.Context
 import com.flagsmith.entities.Flag
 import com.flagsmith.internal.http.*
-import com.flagsmith.internal.http.AndroidAnalyticsStorage
-import com.flagsmith.internal.http.AndroidFlagsmithAnalytics
-import com.flagsmith.internal.http.KtorFlagsmithApi
-import com.flagsmith.internal.http.RetrofitFlagsmithApi
-import com.flagsmith.internal.http.RetrofitFlagsmithEventApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 
-actual fun Flagsmith.Companion.create(
+internal actual fun Flagsmith.Companion.create(
     environmentKey: String,
     baseUrl: String,
     eventSourceBaseUrl: String,
@@ -39,13 +34,13 @@ actual fun Flagsmith.Companion.create(
     writeTimeoutSeconds = writeTimeoutSeconds,
     lastFlagFetchTime = lastFlagFetchTime,
     sseUpdatesScope = sseUpdatesScope,
-    flagsmithApiFactory = KtorFlagsmithApi.Companion,
+    flagsmithApiFactory = RetrofitFlagsmithApi.Companion,
     flagsmithEventApiFactory = RetrofitFlagsmithEventApi.Companion,
     flagsmithAnalyticsFactory = null,
     analyticsStorage = null
 )
 
-fun Flagsmith.Companion.create(
+operator fun Flagsmith.Companion.invoke(
     environmentKey: String,
     baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
     eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
@@ -74,7 +69,7 @@ fun Flagsmith.Companion.create(
     writeTimeoutSeconds = writeTimeoutSeconds,
     lastFlagFetchTime = lastFlagFetchTime,
     sseUpdatesScope = sseUpdatesScope,
-    flagsmithApiFactory = KtorFlagsmithApi.Companion,
+    flagsmithApiFactory = RetrofitFlagsmithApi.Companion,
     flagsmithEventApiFactory = RetrofitFlagsmithEventApi.Companion,
     flagsmithAnalyticsFactory = AndroidFlagsmithAnalytics.Companion,
     analyticsStorage = AndroidAnalyticsStorage(context)

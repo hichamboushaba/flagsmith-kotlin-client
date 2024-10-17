@@ -28,7 +28,7 @@ class FeatureFlagTests {
     @Before
     fun setup() {
         mockServer = ClientAndServer.startClientAndServer()
-        flagsmith = Flagsmith.create(
+        flagsmith = Flagsmith(
             environmentKey = "",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,
@@ -142,7 +142,7 @@ class FeatureFlagTests {
     @Test
     fun testThrowsExceptionWhenCreatingAnalyticsWithoutAContext() {
         val exception = assertThrows(IllegalArgumentException::class.java) {
-            flagsmith = Flagsmith.create(
+            flagsmith = Flagsmith(
                 environmentKey = "",
                 baseUrl = "http://localhost:${mockServer.localPort}",
                 enableAnalytics = true

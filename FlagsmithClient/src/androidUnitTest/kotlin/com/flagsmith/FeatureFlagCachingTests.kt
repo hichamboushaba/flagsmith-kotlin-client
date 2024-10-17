@@ -75,7 +75,7 @@ class FeatureFlagCachingTests {
             ),
         )
 
-        flagsmithWithCache = Flagsmith.create(
+        flagsmithWithCache = Flagsmith(
             environmentKey = "",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = true, // Mix up the analytics flag to test initialisation
@@ -87,7 +87,7 @@ class FeatureFlagCachingTests {
             )
         )
 
-        flagsmithNoCache = Flagsmith.create(
+        flagsmithNoCache = Flagsmith(
             environmentKey = "",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,
@@ -302,7 +302,7 @@ class FeatureFlagCachingTests {
         Assert.assertEquals(756.0, foundFromServer?.featureStateValue)
 
         // Now get a new Flagsmith instance with the same cache and expect the cached response to be returned
-        val newFlagsmithWithCache = Flagsmith.create(
+        val newFlagsmithWithCache = Flagsmith(
             environmentKey = "",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,
@@ -349,7 +349,7 @@ class FeatureFlagCachingTests {
         Assert.assertEquals(756.0, foundFromServer?.featureStateValue)
 
         // Now get a new Flagsmith instance with the same cache and evict the cache straight away
-        val newFlagsmithWithClearedCache = Flagsmith.create(
+        val newFlagsmithWithClearedCache = Flagsmith(
             environmentKey = "",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,

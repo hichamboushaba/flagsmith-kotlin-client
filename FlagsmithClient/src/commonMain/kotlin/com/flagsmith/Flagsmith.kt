@@ -97,11 +97,6 @@ class Flagsmith internal constructor(
         sseUpdatesJob = eventService?.subscribeToEvents()
     }
 
-    companion object {
-        const val DEFAULT_ENABLE_ANALYTICS = true
-        const val DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS = 10
-    }
-
     suspend fun getFeatureFlags(
         identity: String? = null,
         traits: List<Trait>? = null,
@@ -250,7 +245,7 @@ class Flagsmith internal constructor(
         try {
             cache?.invalidate()
         } catch (e: Exception) {
-//            Log.e("Flagsmith", "Error clearing cache", e)
+            println("Error clearing cache, ${e.stackTraceToString()}")
         }
     }
 
@@ -293,15 +288,48 @@ class Flagsmith internal constructor(
                 // Now we can get the new values, which will automatically be emitted to the flagUpdateFlow
                 getFeatureFlags(lastUsedIdentity) { res ->
                     if (res.isFailure) {
-//                        Log.e(
-//                            "Flagsmith",
-//                            "Error getting flags in SSE stream: ${res.exceptionOrNull()}"
-//                        )
+                        // TODO: provide a logging mechanism
+                        println("Error getting flags in SSE stream: ${res.exceptionOrNull()}")
                     } else {
-//                        Log.i("Flagsmith", "Got flags due to SSE event: $event")
+                        println("Got flags due to SSE event: $event")
                     }
                 }
             }
         }
         .launchIn(sseUpdatesScope)
+
+    companion object {
+        const val DEFAULT_ENABLE_ANALYTICS = true
+        const val DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS = 10
+
+        operator fun invoke(
+            environmentKey: String,
+            baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
+            eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
+            enableAnalytics: Boolean = DEFAULT_ENABLE_ANALYTICS,
+            enableRealtimeUpdates: Boolean = false,
+            analyticsFlushPeriod: Int = DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS,
+            cacheConfig: FlagsmithCacheConfig = FlagsmithCacheConfig(),
+            defaultFlags: List<Flag> = emptyList(),
+            requestTimeoutSeconds: Long = 4L,
+            readTimeoutSeconds: Long = 6L,
+            writeTimeoutSeconds: Long = 6L,
+            lastFlagFetchTime: Double = 0.0, // from FlagsmithEventTimeTracker
+            sseUpdatesScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
+        ) = create(
+            environmentKey = environmentKey,
+            baseUrl = baseUrl,
+            eventSourceBaseUrl = eventSourceBaseUrl,
+            enableAnalytics = enableAnalytics,
+            enableRealtimeUpdates = enableRealtimeUpdates,
+            analyticsFlushPeriod = analyticsFlushPeriod,
+            cacheConfig = cacheConfig,
+            defaultFlags = defaultFlags,
+            requestTimeoutSeconds = requestTimeoutSeconds,
+            readTimeoutSeconds = readTimeoutSeconds,
+            writeTimeoutSeconds = writeTimeoutSeconds,
+            lastFlagFetchTime = lastFlagFetchTime,
+            sseUpdatesScope = sseUpdatesScope
+        )
+    }
 }

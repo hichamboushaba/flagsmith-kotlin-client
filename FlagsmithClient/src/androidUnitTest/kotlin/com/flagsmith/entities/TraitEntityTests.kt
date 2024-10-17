@@ -2,7 +2,6 @@ package com.flagsmith.entities
 
 import com.flagsmith.Flagsmith
 import com.flagsmith.FlagsmithCacheConfig
-import com.flagsmith.create
 import com.flagsmith.getTraitSync
 import com.flagsmith.mockResponses.MockEndpoint
 import com.flagsmith.mockResponses.mockResponseFor
@@ -21,7 +20,7 @@ class TraitEntityTests {
     @Before
     fun setup() {
         mockServer = ClientAndServer.startClientAndServer()
-        flagsmith = Flagsmith.create(
+        flagsmith = Flagsmith(
             environmentKey = "",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,
