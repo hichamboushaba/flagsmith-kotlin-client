@@ -45,17 +45,22 @@ kotlin {
             dependencies {
                 implementation(libs.kotlinx.serialization.json)
                 implementation(libs.kotlinx.coroutines.core)
+                implementation(libs.ktor.client.core)
+                implementation(libs.ktor.client.contentNegotiation)
+                implementation(libs.ktor.client.logging)
+                implementation(libs.ktor.serialization.json)
             }
         }
 
         val androidMain by getting {
             dependencies {
-                // HTTP Client
+                // Retrofit
                 implementation(libs.retrofit)
                 implementation(libs.retrofit.converter.kotlinxSerialization)
-
-                // Server Sent Events
                 implementation(libs.okhttp.sse)
+
+                // Ktor
+                implementation(libs.ktor.client.okhttp)
             }
         }
         val androidUnitTest by getting {
@@ -68,6 +73,16 @@ kotlin {
 
                 implementation(libs.awaitility.kotlin)
                 implementation(libs.mockito.kotlin)
+            }
+        }
+        val jvmMain by getting {
+            dependencies {
+                implementation(libs.ktor.client.cio)
+            }
+        }
+        val iosMain by creating {
+            dependencies {
+                implementation(libs.ktor.client.darwin)
             }
         }
     }
