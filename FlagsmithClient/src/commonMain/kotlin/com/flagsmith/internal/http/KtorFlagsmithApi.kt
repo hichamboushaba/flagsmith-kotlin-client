@@ -20,6 +20,7 @@ import io.ktor.util.*
 import io.ktor.util.date.*
 import io.ktor.utils.io.*
 import kotlinx.serialization.json.Json
+import okio.Path.Companion.toPath
 import kotlin.coroutines.CoroutineContext
 import io.ktor.client.plugins.cache.HttpCache as KtorHttpCachePlugin
 
@@ -66,8 +67,7 @@ internal class KtorFlagsmithApi(
             json: Json
         ): Pair<FlagsmithApi, ClearableHttpCache?> {
             val cache = if (cacheConfig.enableCache) {
-                // TODO: provide a persistent cache
-                KtorHttpCache(CacheStorage.Unlimited())
+                KtorFileCacheStorage(cacheConfig.cacheDirectoryPath.toPath())
             } else null
 
             val httpClient = HttpClient {
@@ -82,7 +82,7 @@ internal class KtorFlagsmithApi(
 
                 if (cache != null) {
                     install(KtorHttpCachePlugin) {
-                        publicStorage(cache.storage)
+                        publicStorage(cache)
                     }
                 }
 
@@ -118,13 +118,6 @@ internal class KtorFlagsmithApi(
 
             return KtorFlagsmithApi(httpClient) to cache
         }
-    }
-}
-
-private class KtorHttpCache(val storage: CacheStorage) : ClearableHttpCache {
-    override suspend fun invalidate() {
-        // Ktor does not provide a way to invalidate the cache, TODO: check what can we do here
-        error("Not implemented")
     }
 }
 
