@@ -75,7 +75,7 @@ internal class RetrofitFlagsmithApi(private val service: FlagsmithRetrofitServic
             writeTimeoutSeconds: Long,
             timeTracker: FlagsmithEventTimeTracker,
             json: Json
-        ): Pair<FlagsmithApi, HttpCache?> {
+        ): Pair<FlagsmithApi, ClearableHttpCache?> {
             val (retrofit, cache) = RetrofitBuilder.build(
                 baseUrl = baseUrl,
                 environmentKey = environmentKey,
@@ -103,7 +103,7 @@ internal class RetrofitFlagsmithApi(private val service: FlagsmithRetrofitServic
     }
 }
 
-private class RetrofitHttpCache(private val cache: Cache) : HttpCache {
+private class RetrofitHttpCache(private val cache: Cache) : ClearableHttpCache {
     override fun invalidate() {
         cache.evictAll()
     }

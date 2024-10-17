@@ -29,6 +29,6 @@ internal interface FlagsmithApi {
             writeTimeoutSeconds: Long,
             timeTracker: FlagsmithEventTimeTracker,
             json: Json
-        ): Pair<FlagsmithApi, HttpCache?>
+        ): Pair<FlagsmithApi, ClearableHttpCache?>
     }
 }

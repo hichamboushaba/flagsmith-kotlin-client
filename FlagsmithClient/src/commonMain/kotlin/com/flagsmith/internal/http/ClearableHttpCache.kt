@@ -1,5 +1,5 @@
 package com.flagsmith.internal.http
 
-internal interface HttpCache {
+internal interface ClearableHttpCache {
     fun invalidate()
 }

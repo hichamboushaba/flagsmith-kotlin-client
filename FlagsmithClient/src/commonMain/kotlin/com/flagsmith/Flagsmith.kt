@@ -4,7 +4,7 @@ import com.flagsmith.entities.*
 import com.flagsmith.internal.*
 import com.flagsmith.internal.http.FlagsmithApi
 import com.flagsmith.internal.http.FlagsmithEventApi
-import com.flagsmith.internal.http.HttpCache
+import com.flagsmith.internal.http.ClearableHttpCache
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.launchIn
@@ -48,7 +48,7 @@ class Flagsmith internal constructor(
     private var sseUpdatesJob: Job? = null
 
     private val flagSmithApi: FlagsmithApi
-    private val cache: HttpCache?
+    private val cache: ClearableHttpCache?
     private val analytics: FlagsmithAnalytics?
 
     private var lastUsedIdentity: String? = null

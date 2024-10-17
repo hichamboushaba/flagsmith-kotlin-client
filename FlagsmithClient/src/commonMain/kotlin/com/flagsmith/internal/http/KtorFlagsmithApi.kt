@@ -64,7 +64,7 @@ internal class KtorFlagsmithApi(
             writeTimeoutSeconds: Long,
             timeTracker: FlagsmithEventTimeTracker,
             json: Json
-        ): Pair<FlagsmithApi, HttpCache?> {
+        ): Pair<FlagsmithApi, ClearableHttpCache?> {
             val cache = if (cacheConfig.enableCache) {
                 // TODO: provide a persistent cache
                 KtorHttpCache(CacheStorage.Unlimited())
@@ -121,7 +121,7 @@ internal class KtorFlagsmithApi(
     }
 }
 
-private class KtorHttpCache(val storage: CacheStorage) : HttpCache {
+private class KtorHttpCache(val storage: CacheStorage) : ClearableHttpCache {
     override fun invalidate() {
         // Ktor does not provide a way to invalidate the cache, TODO: check what can we do here
         error("Not implemented")
