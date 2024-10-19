@@ -57,7 +57,10 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
         flagsmith = Flagsmith(
             environmentKey = environmentKey!!,
             enableAnalytics = false,
-            cacheConfig = FlagsmithCacheConfig(enableCache = true),
+            cacheConfig = FlagsmithCacheConfig(
+                enableCache = true,
+                cacheDirectoryPath = "cache"
+            ),
             enableRealtimeUpdates = true
         )
 
@@ -75,6 +78,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
 
     @After
     fun tearDown() {
+        runBlocking {  flagsmith.clearCache() }
     }
 
     private fun setupMocks() {
@@ -152,6 +156,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
 
             Assert.assertTrue("Response should be successful: $response", response.isSuccessful)
         }
+        flagsmith.close()
         return@runBlocking
     }
 
@@ -191,6 +196,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
         // Now get the flag again using the normal API and check the value is the same
         val newUpdatedFeatureValueFromApi = flagsmith.getValueForFeatureSync(featureId).getOrThrow() as String?
         Assert.assertEquals(expectedNewValue, newUpdatedFeatureValueFromApi)
+        flagsmith.close()
     }
 
     @Test(timeout = 120_000)
@@ -221,5 +227,6 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
         } while (newUpdatedFeatureValue.isNullOrEmpty() ||  newUpdatedFeatureValue == currentFlagValueString)
 
         Assert.assertEquals("new-value-via-flow", newUpdatedFeatureValue)
+        flagsmith.close()
     }
 }
