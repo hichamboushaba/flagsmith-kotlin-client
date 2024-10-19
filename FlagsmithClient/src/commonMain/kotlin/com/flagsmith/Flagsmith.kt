@@ -66,6 +66,9 @@ class Flagsmith internal constructor(
         if (enableRealtimeUpdates && flagsmithEventApiFactory == null) {
             error("Real-time updates are enabled but no event API factory was provided")
         }
+        require(!cacheConfig.enableCache || cacheConfig.cacheDirectoryPath.isNotEmpty()) {
+            "Cache directory path must be provided when cache is enabled"
+        }
 
         flagsmithApiFactory.create(
             baseUrl = baseUrl,
