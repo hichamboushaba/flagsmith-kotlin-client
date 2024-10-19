@@ -128,7 +128,7 @@ private class ForceCacheResponse(
     override val call: HttpClientCall by originalResponse::call
 
     @InternalAPI
-    override val content: ByteReadChannel by originalResponse::content
+    override val rawContent: ByteReadChannel by originalResponse::rawContent
     override val coroutineContext: CoroutineContext by originalResponse::coroutineContext
     override val requestTime: GMTDate by originalResponse::requestTime
     override val responseTime: GMTDate by originalResponse::responseTime
