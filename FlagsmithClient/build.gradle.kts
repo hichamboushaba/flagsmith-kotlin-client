@@ -1,3 +1,4 @@
+import com.android.build.gradle.internal.ide.kmp.KotlinAndroidSourceSetMarker.Companion.android
 import groovy.time.TimeCategory
 import kotlinx.kover.api.CounterType
 import kotlinx.kover.api.VerificationTarget
@@ -52,6 +53,9 @@ kotlin {
                 implementation(libs.ktor.serialization.json)
 
                 implementation(libs.okio)
+
+                implementation(libs.multiplatform.settings)
+                implementation(libs.multiplatform.settings.serialization)
             }
         }
         val commonTest by getting {
@@ -69,6 +73,8 @@ kotlin {
 
                 // Ktor
                 implementation(libs.ktor.client.okhttp)
+
+                implementation(libs.androidx.startup)
             }
         }
         val androidUnitTest by getting {

@@ -2,6 +2,7 @@ package com.flagsmith
 
 import android.content.Context
 import com.flagsmith.entities.Flag
+import com.flagsmith.internal.DefaultFlagsmithAnalytics
 import com.flagsmith.internal.http.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +20,7 @@ internal actual fun Flagsmith.Companion.create(
     readTimeoutSeconds: Long,
     writeTimeoutSeconds: Long,
     lastFlagFetchTime: Double,
-    sseUpdatesScope: CoroutineScope
+    coroutineScope: CoroutineScope
 ) = Flagsmith(
     environmentKey = environmentKey,
     baseUrl = baseUrl,
@@ -33,11 +34,10 @@ internal actual fun Flagsmith.Companion.create(
     readTimeoutSeconds = readTimeoutSeconds,
     writeTimeoutSeconds = writeTimeoutSeconds,
     lastFlagFetchTime = lastFlagFetchTime,
-    sseUpdatesScope = sseUpdatesScope,
-    flagsmithApiFactory = RetrofitFlagsmithApi.Companion,
-    flagsmithEventApiFactory = RetrofitFlagsmithEventApi.Companion,
-    flagsmithAnalyticsFactory = null,
-    analyticsStorage = null
+    coroutineScope = coroutineScope,
+    flagsmithApiFactory = KtorFlagsmithApi,
+    flagsmithEventApiFactory = KtorFlagsmithEventApi,
+    flagsmithAnalyticsFactory = DefaultFlagsmithAnalytics,
 )
 
 operator fun Flagsmith.Companion.invoke(
@@ -54,7 +54,7 @@ operator fun Flagsmith.Companion.invoke(
     readTimeoutSeconds: Long = 6L,
     writeTimeoutSeconds: Long = 6L,
     lastFlagFetchTime: Double = 0.0, // from FlagsmithEventTimeTracker
-    sseUpdatesScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
+    coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
 ): Flagsmith = Flagsmith(
     environmentKey = environmentKey,
     baseUrl = baseUrl,
@@ -68,9 +68,8 @@ operator fun Flagsmith.Companion.invoke(
     readTimeoutSeconds = readTimeoutSeconds,
     writeTimeoutSeconds = writeTimeoutSeconds,
     lastFlagFetchTime = lastFlagFetchTime,
-    sseUpdatesScope = sseUpdatesScope,
-    flagsmithApiFactory = RetrofitFlagsmithApi.Companion,
-    flagsmithEventApiFactory = RetrofitFlagsmithEventApi.Companion,
-    flagsmithAnalyticsFactory = AndroidFlagsmithAnalytics.Companion,
-    analyticsStorage = AndroidAnalyticsStorage(context)
+    coroutineScope = coroutineScope,
+    flagsmithApiFactory = RetrofitFlagsmithApi,
+    flagsmithEventApiFactory = RetrofitFlagsmithEventApi,
+    flagsmithAnalyticsFactory = DefaultFlagsmithAnalytics
 )

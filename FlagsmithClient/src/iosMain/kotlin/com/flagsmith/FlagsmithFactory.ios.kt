@@ -1,7 +1,9 @@
 package com.flagsmith
 
 import com.flagsmith.entities.Flag
+import com.flagsmith.internal.DefaultFlagsmithAnalytics
 import com.flagsmith.internal.http.KtorFlagsmithApi
+import com.flagsmith.internal.http.KtorFlagsmithEventApi
 import kotlinx.coroutines.CoroutineScope
 
 internal actual fun Flagsmith.Companion.create(
@@ -17,7 +19,7 @@ internal actual fun Flagsmith.Companion.create(
     readTimeoutSeconds: Long,
     writeTimeoutSeconds: Long,
     lastFlagFetchTime: Double,
-    sseUpdatesScope: CoroutineScope
+    coroutineScope: CoroutineScope
 ): Flagsmith = Flagsmith(
     environmentKey = environmentKey,
     baseUrl = baseUrl,
@@ -31,9 +33,8 @@ internal actual fun Flagsmith.Companion.create(
     readTimeoutSeconds = readTimeoutSeconds,
     writeTimeoutSeconds = writeTimeoutSeconds,
     lastFlagFetchTime = lastFlagFetchTime,
-    sseUpdatesScope = sseUpdatesScope,
-    flagsmithApiFactory = KtorFlagsmithApi.Companion,
-    flagsmithEventApiFactory = null,
-    flagsmithAnalyticsFactory = null,
-    analyticsStorage = null
+    coroutineScope = coroutineScope,
+    flagsmithApiFactory = KtorFlagsmithApi,
+    flagsmithEventApiFactory = KtorFlagsmithEventApi,
+    flagsmithAnalyticsFactory = DefaultFlagsmithAnalytics
 )

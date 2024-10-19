@@ -16,5 +16,5 @@ internal expect fun Flagsmith.Companion.create(
     readTimeoutSeconds: Long,
     writeTimeoutSeconds: Long,
     lastFlagFetchTime: Double,
-    sseUpdatesScope: CoroutineScope,
+    coroutineScope: CoroutineScope,
 ): Flagsmith

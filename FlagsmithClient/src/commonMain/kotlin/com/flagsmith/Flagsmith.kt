@@ -34,11 +34,10 @@ class Flagsmith internal constructor(
     private val readTimeoutSeconds: Long = 6L,
     private val writeTimeoutSeconds: Long = 6L,
     override var lastFlagFetchTime: Double = 0.0, // from FlagsmithEventTimeTracker
-    private val sseUpdatesScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
+    private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
     flagsmithApiFactory: FlagsmithApi.Factory,
     flagsmithEventApiFactory: FlagsmithEventApi.Factory?,
-    flagsmithAnalyticsFactory: FlagsmithAnalytics.Factory?,
-    analyticsStorage: FlagsmithAnalytics.Storage?
+    flagsmithAnalyticsFactory: FlagsmithAnalytics.Factory?
 ) : FlagsmithEventTimeTracker {
     private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates || flagsmithEventApiFactory == null) {
         null
@@ -86,10 +85,7 @@ class Flagsmith internal constructor(
             requireNotNull(flagsmithAnalyticsFactory) {
                 "Analytics is enabled but no analytics factory was provided"
             }
-            requireNotNull(analyticsStorage) {
-                "Analytics is enabled but no analytics storage was provided"
-            }
-            flagsmithAnalyticsFactory.create(analyticsStorage, flagSmithApi, analyticsFlushPeriod)
+            flagsmithAnalyticsFactory.create(flagSmithApi, analyticsFlushPeriod, coroutineScope)
         } else {
             null
         }
@@ -249,18 +245,18 @@ class Flagsmith internal constructor(
         }
     }
 
-    fun reStartRealtimeUpdates() {
+    fun restartRealtimeUpdates() {
         if (!enableRealtimeUpdates) {
             error("Real-time updates are not enabled for this instance")
         }
-        if (!sseUpdatesScope.isActive) {
+        if (!coroutineScope.isActive) {
             error("The SSE updates scope has been canceled")
         }
         sseUpdatesJob = eventService?.subscribeToEvents()
     }
 
     /**
-     * Used to stop real-time updates, to restart call [reStartRealtimeUpdates]
+     * Used to stop real-time updates and Analytics periodic updates, to restart call [restartRealtimeUpdates]
      */
     fun close() {
         sseUpdatesJob?.cancel()
@@ -296,7 +292,7 @@ class Flagsmith internal constructor(
                 }
             }
         }
-        .launchIn(sseUpdatesScope)
+        .launchIn(coroutineScope)
 
     companion object {
         const val DEFAULT_ENABLE_ANALYTICS = true
@@ -329,7 +325,7 @@ class Flagsmith internal constructor(
             readTimeoutSeconds = readTimeoutSeconds,
             writeTimeoutSeconds = writeTimeoutSeconds,
             lastFlagFetchTime = lastFlagFetchTime,
-            sseUpdatesScope = sseUpdatesScope
+            coroutineScope = sseUpdatesScope
         )
     }
 }
