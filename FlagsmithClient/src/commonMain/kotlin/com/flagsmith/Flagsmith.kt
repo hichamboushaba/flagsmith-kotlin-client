@@ -1,10 +1,12 @@
 package com.flagsmith
 
 import com.flagsmith.entities.*
-import com.flagsmith.internal.*
+import com.flagsmith.internal.FlagsmithAnalytics
+import com.flagsmith.internal.FlagsmithEventService
+import com.flagsmith.internal.FlagsmithEventTimeTracker
+import com.flagsmith.internal.http.ClearableHttpCache
 import com.flagsmith.internal.http.FlagsmithApi
 import com.flagsmith.internal.http.FlagsmithEventApi
-import com.flagsmith.internal.http.ClearableHttpCache
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.launchIn
@@ -108,23 +110,21 @@ class Flagsmith internal constructor(
             if (traits != null) {
                 flagSmithApi.postTraits(IdentityAndTraits(identity, traits, transient))
                     .map { it.flags }
-                    .also { lastUsedIdentity = identity }
             } else {
                 flagSmithApi.getIdentityFlagsAndTraits(identity, transient)
                     .map { it.flags }
-                    .also { flagUpdateFlow.tryEmit(it.getOrNull() ?: emptyList()) }
             }
         } else {
             if (traits != null) {
                 throw IllegalArgumentException("Cannot set traits without an identity");
             } else {
                 flagSmithApi.getFlags()
-                    .recover { defaultFlags }
-                    .also { res ->
-                        flagUpdateFlow.tryEmit(res.getOrNull() ?: emptyList())
-                    }
             }
         }
+            .recoverCatching { defaultFlags.ifEmpty { throw it } }
+            .also { res ->
+                flagUpdateFlow.tryEmit(res.getOrNull() ?: emptyList())
+            }
     }
 
     fun getFeatureFlags(
