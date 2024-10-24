@@ -377,4 +377,44 @@ class FeatureFlagCachingTests {
         await untilTrue (hasFinishedGetRequest)
         Assert.assertNull("Shouldn't get any data back as we don't have a cache", foundFromCache)
     }
+
+    @Test
+    fun testReturnsStaleCacheWhenEnabled() {
+        mockServer.mockResponseFor(MockEndpoint.GET_FLAGS)
+        mockServer.mockFailureFor(MockEndpoint.GET_FLAGS)
+
+        val flagsmithWithCache = Flagsmith(
+            environmentKey = "",
+            baseUrl = "http://localhost:${mockServer.localPort}",
+            enableAnalytics = false,
+            cacheConfig = FlagsmithCacheConfig(
+                enableCache = true,
+                cacheDirectoryPath = CACHE_DIR,
+                cacheTTLSeconds = 10,
+                acceptStaleCache = true
+            )
+        )
+
+        var foundFromServer: Flag? = null
+        runBlocking { flagsmithWithCache.clearCache() }
+        flagsmithWithCache.getFeatureFlags { result ->
+            Assert.assertTrue(result.isSuccess)
+
+            foundFromServer = result.getOrThrow().first()
+        }
+
+        await untilNotNull { foundFromServer }
+        Assert.assertNotNull(foundFromServer)
+
+        Thread.sleep(12_000)
+
+        var foundFromCache: Flag? = null
+        flagsmithWithCache.getFeatureFlags { result ->
+            Assert.assertTrue(result.isSuccess)
+
+            foundFromCache = result.getOrThrow().first()
+        }
+        await untilNotNull { foundFromCache }
+        Assert.assertNotNull(foundFromCache)
+    }
 }

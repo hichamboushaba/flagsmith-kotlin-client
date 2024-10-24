@@ -9,14 +9,12 @@ import com.flagsmith.internal.FlagsmithEventTimeTracker
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.*
-import io.ktor.client.plugins.cache.storage.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.logging.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
-import io.ktor.util.*
 import io.ktor.util.date.*
 import io.ktor.utils.io.*
 import kotlinx.serialization.json.Json
@@ -25,19 +23,19 @@ import kotlin.coroutines.CoroutineContext
 import io.ktor.client.plugins.cache.HttpCache as KtorHttpCachePlugin
 
 internal class KtorFlagsmithApi(
-    private val httpClient: HttpClient
+    private val httpClient: HttpClient,
+    private val acceptStaleCache: Boolean
 ) : FlagsmithApi {
     override suspend fun getIdentityFlagsAndTraits(
         identity: String,
         transient: Boolean
-    ): Result<IdentityFlagsAndTraits> = runCatching {
-        httpClient.get("identities/") {
-            parameter("identifier", identity)
-            parameter("transient", transient)
-        }.body()
-    }
+    ): Result<IdentityFlagsAndTraits> = httpClient.getWithStaleCacheIfNeeded("identities/") {
+        parameter("identifier", identity)
+        parameter("transient", transient)
+    }.map { it.body() }
 
-    override suspend fun getFlags(): Result<List<Flag>> = runCatching { httpClient.get("flags/").body() }
+    override suspend fun getFlags(): Result<List<Flag>> = httpClient.getWithStaleCacheIfNeeded("flags/")
+        .map { it.body() }
 
     override suspend fun postTraits(identity: IdentityAndTraits): Result<IdentityFlagsAndTraits> {
         return runCatching {
@@ -50,6 +48,24 @@ internal class KtorFlagsmithApi(
     override suspend fun postAnalytics(eventMap: Map<String, Int?>): Result<Unit> = runCatching {
         httpClient.post("analytics/flags/") {
             setBody(eventMap)
+        }
+    }
+
+    private suspend fun HttpClient.getWithStaleCacheIfNeeded(
+        url: String,
+        block: HttpRequestBuilder.() -> Unit = {}
+    ): Result<HttpResponse> {
+        return runCatching {
+            get(url, block)
+        }.recoverCatching {
+            if (acceptStaleCache) {
+                get(url) {
+                    block()
+                    header(HttpHeaders.CacheControl, "max-stale=${Int.MAX_VALUE}")
+                }
+            } else {
+                throw it
+            }
         }
     }
 
@@ -106,9 +122,7 @@ internal class KtorFlagsmithApi(
             }
 
             httpClient.receivePipeline.intercept(HttpReceivePipeline.Before) { response ->
-                if (cacheConfig.enableCache) {
-                    proceedWith(ForceCacheResponse(response, cacheConfig.cacheTTLSeconds.toInt()))
-                }
+                proceedWith(ForceCacheResponse(response))
 
                 val updatedAtString = response.headers[UPDATED_AT_HEADER]
                 updatedAtString?.toDoubleOrNull()?.let {
@@ -116,14 +130,13 @@ internal class KtorFlagsmithApi(
                 }
             }
 
-            return KtorFlagsmithApi(httpClient) to cache
+            return KtorFlagsmithApi(httpClient, cacheConfig.acceptStaleCache) to cache
         }
     }
 }
 
 private class ForceCacheResponse(
-    private val originalResponse: HttpResponse,
-    private val cacheTTLSeconds: Int
+    private val originalResponse: HttpResponse
 ) : HttpResponse() {
     override val call: HttpClientCall by originalResponse::call
 
@@ -138,9 +151,11 @@ private class ForceCacheResponse(
     override val headers: Headers by lazy {
         headers {
             appendAll(originalResponse.headers)
-            remove(HttpHeaders.Pragma)
-            remove(HttpHeaders.CacheControl)
-            append(HttpHeaders.CacheControl, CacheControl.MaxAge(cacheTTLSeconds).toString())
+            call.request.headers[HttpHeaders.CacheControl]?.let { cacheControl ->
+                remove(HttpHeaders.Pragma)
+                remove(HttpHeaders.CacheControl)
+                append(HttpHeaders.CacheControl, cacheControl)
+            }
         }
     }
 }
