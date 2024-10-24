@@ -23,7 +23,7 @@ internal actual fun Flagsmith.Companion.create(
     lastFlagFetchTime: Double,
     coroutineScope: CoroutineScope
 ): Flagsmith {
-    val config = cacheConfig.initCacheDirIfNeeded(appContext)
+    val config = cacheConfig.initCacheDirIfNeeded()
 
     return Flagsmith(
         environmentKey = environmentKey,
@@ -61,7 +61,8 @@ operator fun Flagsmith.Companion.invoke(
     lastFlagFetchTime: Double = 0.0, // from FlagsmithEventTimeTracker
     coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
 ): Flagsmith {
-    val config = cacheConfig.initCacheDirIfNeeded(context)
+    appContext = context
+    val config = cacheConfig.initCacheDirIfNeeded()
     return Flagsmith(
         environmentKey = environmentKey,
         baseUrl = baseUrl,
@@ -82,10 +83,10 @@ operator fun Flagsmith.Companion.invoke(
     )
 }
 
-private fun FlagsmithCacheConfig.initCacheDirIfNeeded(appContext: Context?): FlagsmithCacheConfig {
-    if (cacheDirectoryPath.isNotEmpty() || appContext == null) {
+private fun FlagsmithCacheConfig.initCacheDirIfNeeded(): FlagsmithCacheConfig {
+    if (!enableCache || cacheDirectoryPath.isNotEmpty() || appContext == null) {
         return this
     }
-    return copy(cacheDirectoryPath = appContext.cacheDir.absolutePath)
+    return copy(cacheDirectoryPath = appContext!!.cacheDir.absolutePath)
 }
 

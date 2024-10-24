@@ -6,6 +6,7 @@ import android.content.res.Resources
 import android.graphics.Color
 import com.flagsmith.entities.Feature
 import com.flagsmith.entities.Flag
+import com.flagsmith.internal.appContext
 import com.flagsmith.mockResponses.MockEndpoint
 import com.flagsmith.mockResponses.mockDelayFor
 import com.flagsmith.mockResponses.mockFailureFor
@@ -25,6 +26,7 @@ import org.mockito.Mock
 import org.mockito.Mockito.`when`
 import org.mockito.MockitoAnnotations
 import org.mockserver.integration.ClientAndServer
+import java.io.File
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -75,11 +77,11 @@ class FeatureFlagCachingTests {
             ),
         )
 
+        appContext = mockApplicationContext
         flagsmithWithCache = Flagsmith(
             environmentKey = "",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = true, // Mix up the analytics flag to test initialisation
-            context = mockApplicationContext,
             defaultFlags = defaultFlags,
             cacheConfig = FlagsmithCacheConfig(
                 enableCache = true,
@@ -121,6 +123,7 @@ class FeatureFlagCachingTests {
     @After
     fun tearDown() {
         mockServer.stop()
+        File(CACHE_DIR).delete()
     }
 
     @Test
