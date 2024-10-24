@@ -127,17 +127,6 @@ class Flagsmith internal constructor(
             }
     }
 
-    fun getFeatureFlags(
-        identity: String? = null,
-        traits: List<Trait>? = null,
-        transient: Boolean = false,
-        result: (Result<List<Flag>>) -> Unit
-    ) {
-        CoroutineScope(Dispatchers.Unconfined).launch {
-            result(getFeatureFlags(identity, traits, transient))
-        }
-    }
-
     suspend fun hasFeatureFlag(
         featureId: String,
         identity: String? = null
@@ -160,38 +149,16 @@ class Flagsmith internal constructor(
         identity: String? = null
     ) = getFeatureFlag(featureId, identity).map { flag -> flag?.featureStateValue }
 
-    fun getValueForFeature(
-        featureId: String,
-        identity: String? = null,
-        result: (Result<Any?>) -> Unit
-    ) {
-        CoroutineScope(Dispatchers.Unconfined).launch {
-            result(getValueForFeature(featureId, identity))
-        }
-    }
-
     suspend fun getTrait(id: String, identity: String): Result<Trait?> {
         return flagSmithApi.getIdentityFlagsAndTraits(identity)
             .map { value -> value.traits.find { it.key == id } }
             .also { lastUsedIdentity = identity }
     }
 
-    fun getTrait(id: String, identity: String, result: (Result<Trait?>) -> Unit) {
-        CoroutineScope(Dispatchers.Unconfined).launch {
-            result(getTrait(id, identity))
-        }
-    }
-
     suspend fun getTraits(identity: String): Result<List<Trait>> {
         return flagSmithApi.getIdentityFlagsAndTraits(identity)
             .map { value -> value.traits }
             .also { lastUsedIdentity = identity }
-    }
-
-    fun getTraits(identity: String, result: (Result<List<Trait>>) -> Unit) {
-        CoroutineScope(Dispatchers.Unconfined).launch {
-            result(getTraits(identity))
-        }
     }
 
     suspend fun setTrait(trait: Trait, identity: String): Result<TraitWithIdentity> {
@@ -203,12 +170,6 @@ class Flagsmith internal constructor(
                     identity = Identity(identity)
                 )
             }
-    }
-
-    fun setTrait(trait: Trait, identity: String, result: (Result<TraitWithIdentity>) -> Unit) {
-        CoroutineScope(Dispatchers.Unconfined).launch {
-            result(setTrait(trait, identity))
-        }
     }
 
     suspend fun setTraits(traits: List<Trait>, identity: String): Result<List<TraitWithIdentity>> {
@@ -224,21 +185,9 @@ class Flagsmith internal constructor(
             }
     }
 
-    fun setTraits(traits: List<Trait>, identity: String, result: (Result<List<TraitWithIdentity>>) -> Unit) {
-        CoroutineScope(Dispatchers.Unconfined).launch {
-            result(setTraits(traits, identity))
-        }
-    }
-
     suspend fun getIdentity(identity: String, transient: Boolean = false): Result<IdentityFlagsAndTraits> =
         flagSmithApi.getIdentityFlagsAndTraits(identity, transient)
             .also { lastUsedIdentity = identity }
-
-    fun getIdentity(identity: String, transient: Boolean = false, result: (Result<IdentityFlagsAndTraits>) -> Unit) {
-        CoroutineScope(Dispatchers.Unconfined).launch {
-            result(getIdentity(identity, transient))
-        }
-    }
 
     suspend fun clearCache() {
         try {

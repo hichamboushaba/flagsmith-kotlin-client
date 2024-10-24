@@ -210,7 +210,7 @@ class FeatureFlagCachingTests {
 
         // Now we mock the failure and expect the cached response to be returned
         var foundFromCache: Flag? = null
-        flagsmithWithCache.getFeatureFlags() { result ->
+        flagsmithWithCache.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromCache =
