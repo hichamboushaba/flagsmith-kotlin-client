@@ -123,6 +123,7 @@ class FeatureFlagCachingTests {
     fun tearDown() {
         mockServer.stop()
         File(CACHE_DIR).delete()
+        appContext = null
     }
 
     @Test
