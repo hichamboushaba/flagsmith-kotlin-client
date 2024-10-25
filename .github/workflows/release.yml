@@ -1,0 +1,26 @@
+on:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: 17
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Publish
+        run: gradle check publish --no-configure-on-demand --no-daemon
+        env:
+          ORG_GRADLE_PROJECT_githubUsername: ${{ github.actor }}
+          ORG_GRADLE_PROJECT_githubPassword: ${{ github.token }}

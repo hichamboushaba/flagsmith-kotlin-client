@@ -6,6 +6,7 @@ import kotlinx.kover.api.VerificationValueType
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 import java.io.ByteArrayOutputStream
+import java.lang.System.getenv
 import java.util.Date
 
 plugins {
@@ -231,16 +232,22 @@ fun String.contentLine(length: Int, extraPadding: String = "  ") =
 fun tableLine(length: Int, leading: String, trailing: String) =
     "─".repeat(length - 2).wrapWith(leading, trailing)
 
-//publishing {
-//    publications {
-//        register<MavenPublication>("release") {
-//            groupId = "com.flagsmith"
-//            artifactId = "flagsmith-kotlin-android-client"
-//            version = versionNumber
-//
-//            afterEvaluate {
-//                from(components["release"])
-//            }
-//        }
-//    }
-//}
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            groupId = "dev.hichamboushaba"
+            artifactId = "flagsmith-kotlin-client"
+            version = versionNumber
+
+            from(components["kotlin"])
+        }
+    }
+
+    repositories {
+        maven {
+            name = "github"
+            url = uri("https://maven.pkg.github.com/${getenv("GITHUB_REPOSITORY")}")
+            credentials(PasswordCredentials::class)
+        }
+    }
+}
