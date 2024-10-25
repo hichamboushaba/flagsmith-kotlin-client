@@ -19,3 +19,4 @@ dependencyResolutionManagement {
 rootProject.name = "Flagsmith"
 
 include(":FlagsmithClient")
+project(":FlagsmithClient").name = "flagsmith-kotlin-client"
