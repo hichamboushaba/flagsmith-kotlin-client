@@ -29,6 +29,9 @@ val versionNumber: String by lazy {
     return@lazy version.ifEmpty { "0.1.0" }
 }
 
+group = "dev.hichamboushaba"
+version = versionNumber
+
 kotlin {
     androidTarget {
         publishLibraryVariants("release", "debug")
