@@ -24,18 +24,28 @@ import io.ktor.client.plugins.cache.HttpCache as KtorHttpCachePlugin
 
 internal class KtorFlagsmithApi(
     private val httpClient: HttpClient,
-    private val acceptStaleCache: Boolean
+    private val cacheConfig: FlagsmithCacheConfig
 ) : FlagsmithApi {
     override suspend fun getIdentityFlagsAndTraits(
         identity: String,
-        transient: Boolean
-    ): Result<IdentityFlagsAndTraits> = httpClient.getWithStaleCacheIfNeeded("identities/") {
+        transient: Boolean,
+        forceRefresh: Boolean
+    ): Result<IdentityFlagsAndTraits> = httpClient.getWithCacheIfEnabled(
+        url = "identities/",
+        enableCache = cacheConfig.enableCache,
+        acceptStaleCache = cacheConfig.acceptStaleCache,
+        forceRefresh = forceRefresh
+    ) {
         parameter("identifier", identity)
         parameter("transient", transient)
     }.map { it.body() }
 
-    override suspend fun getFlags(): Result<List<Flag>> = httpClient.getWithStaleCacheIfNeeded("flags/")
-        .map { it.body() }
+    override suspend fun getFlags(forceRefresh: Boolean): Result<List<Flag>> = httpClient.getWithCacheIfEnabled(
+        url = "flags/",
+        enableCache = cacheConfig.enableCache,
+        acceptStaleCache = cacheConfig.acceptStaleCache,
+        forceRefresh = forceRefresh
+    ).map { it.body() }
 
     override suspend fun postTraits(identity: IdentityAndTraits): Result<IdentityFlagsAndTraits> {
         return runCatching {
@@ -51,14 +61,28 @@ internal class KtorFlagsmithApi(
         }
     }
 
-    private suspend fun HttpClient.getWithStaleCacheIfNeeded(
+    private suspend fun HttpClient.getWithCacheIfEnabled(
         url: String,
+        enableCache: Boolean,
+        forceRefresh: Boolean,
+        acceptStaleCache: Boolean,
         block: HttpRequestBuilder.() -> Unit = {}
     ): Result<HttpResponse> {
         return runCatching {
-            get(url, block)
+            get(url) {
+                block()
+                if (enableCache) {
+                    val headerValue = if (forceRefresh) {
+                        CacheControl.NoCache(null)
+                    } else {
+                        CacheControl.MaxAge(cacheConfig.cacheTTLSeconds.toInt())
+                    }
+
+                    header(HttpHeaders.CacheControl, headerValue)
+                }
+            }
         }.recoverCatching {
-            if (acceptStaleCache) {
+            if (enableCache && acceptStaleCache) {
                 get(url) {
                     block()
                     header(HttpHeaders.CacheControl, "max-stale=${Int.MAX_VALUE}")
@@ -115,14 +139,13 @@ internal class KtorFlagsmithApi(
                     contentType(ContentType.Application.Json)
 
                     header("X-Environment-Key", environmentKey)
-                    if (cacheConfig.enableCache) {
-                        header(HttpHeaders.CacheControl, CacheControl.MaxAge(cacheConfig.cacheTTLSeconds.toInt()))
-                    }
                 }
             }
 
             httpClient.receivePipeline.intercept(HttpReceivePipeline.Before) { response ->
-                proceedWith(ForceCacheResponse(response))
+                if (cacheConfig.enableCache) {
+                    proceedWith(ForceCacheResponse(response, cacheConfig.cacheTTLSeconds))
+                }
 
                 val updatedAtString = response.headers[UPDATED_AT_HEADER]
                 updatedAtString?.toDoubleOrNull()?.let {
@@ -130,13 +153,14 @@ internal class KtorFlagsmithApi(
                 }
             }
 
-            return KtorFlagsmithApi(httpClient, cacheConfig.acceptStaleCache) to cache
+            return KtorFlagsmithApi(httpClient, cacheConfig) to cache
         }
     }
 }
 
 private class ForceCacheResponse(
-    private val originalResponse: HttpResponse
+    private val originalResponse: HttpResponse,
+    private val cacheTTLSeconds: Long
 ) : HttpResponse() {
     override val call: HttpClientCall by originalResponse::call
 
@@ -151,11 +175,9 @@ private class ForceCacheResponse(
     override val headers: Headers by lazy {
         headers {
             appendAll(originalResponse.headers)
-            call.request.headers[HttpHeaders.CacheControl]?.let { cacheControl ->
-                remove(HttpHeaders.Pragma)
-                remove(HttpHeaders.CacheControl)
-                append(HttpHeaders.CacheControl, cacheControl)
-            }
+            remove(HttpHeaders.Pragma)
+            remove(HttpHeaders.CacheControl)
+            append(HttpHeaders.CacheControl, CacheControl.MaxAge(cacheTTLSeconds.toInt()).toString())
         }
     }
 }

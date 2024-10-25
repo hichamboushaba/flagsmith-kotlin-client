@@ -12,10 +12,11 @@ fun Flagsmith.getFeatureFlags(
     identity: String? = null,
     traits: List<Trait>? = null,
     transient: Boolean = false,
+    forceRefresh: Boolean = false,
     result: (Result<List<Flag>>) -> Unit
 ) {
     CoroutineScope(Dispatchers.Unconfined).launch {
-        result(getFeatureFlags(identity, traits, transient))
+        result(getFeatureFlags(identity, traits, transient, forceRefresh))
     }
 }
 

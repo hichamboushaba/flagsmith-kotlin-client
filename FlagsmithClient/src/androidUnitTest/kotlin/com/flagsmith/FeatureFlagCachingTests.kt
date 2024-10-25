@@ -7,10 +7,7 @@ import android.graphics.Color
 import com.flagsmith.entities.Feature
 import com.flagsmith.entities.Flag
 import com.flagsmith.internal.appContext
-import com.flagsmith.mockResponses.MockEndpoint
-import com.flagsmith.mockResponses.mockDelayFor
-import com.flagsmith.mockResponses.mockFailureFor
-import com.flagsmith.mockResponses.mockResponseFor
+import com.flagsmith.mockResponses.*
 import kotlinx.coroutines.runBlocking
 import org.awaitility.Awaitility
 import org.awaitility.kotlin.await
@@ -25,10 +22,12 @@ import org.mockito.ArgumentMatchers.anyString
 import org.mockito.Mock
 import org.mockito.Mockito.`when`
 import org.mockito.MockitoAnnotations
+import org.mockito.kotlin.mock
 import org.mockserver.integration.ClientAndServer
 import java.io.File
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.test.assertTrue
 
 private const val CACHE_DIR = "cache"
 
@@ -416,5 +415,46 @@ class FeatureFlagCachingTests {
         }
         await untilNotNull { foundFromCache }
         Assert.assertNotNull(foundFromCache)
+    }
+
+    @Test
+    fun testSkipsCacheWhenRefreshing() {
+        mockServer.mockResponseFor(MockEndpoint.GET_FLAGS)
+        mockServer.mockResponseFor(
+            path = MockEndpoint.GET_FLAGS.path,
+            body = MockResponses.getFlags.replace("\"feature_state_value\": 7", "\"feature_state_value\": 8")
+        )
+        mockServer.mockFailureFor(MockEndpoint.GET_FLAGS)
+
+        var initialValue: Flag? = null
+
+        flagsmithWithCache.getFeatureFlags { result ->
+            Assert.assertTrue(result.isSuccess)
+
+            initialValue = result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
+        }
+
+        await untilNotNull { initialValue }
+        assertTrue(initialValue?.featureStateValue == 7.0)
+
+        var updatedValue: Flag? = null
+        flagsmithWithCache.getFeatureFlags(forceRefresh = true) { result ->
+            Assert.assertTrue(result.isSuccess)
+
+            updatedValue = result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
+        }
+
+        await untilNotNull { updatedValue }
+        assertTrue(updatedValue?.featureStateValue == 8.0)
+
+        var foundFromCache: Flag? = null
+        flagsmithWithCache.getFeatureFlags { result ->
+            Assert.assertTrue(result.isSuccess)
+
+            foundFromCache = result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
+        }
+
+        await untilNotNull { foundFromCache }
+        assertTrue(foundFromCache?.featureStateValue == 8.0)
     }
 }

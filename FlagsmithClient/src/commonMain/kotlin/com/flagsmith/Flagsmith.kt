@@ -101,7 +101,8 @@ class Flagsmith internal constructor(
     suspend fun getFeatureFlags(
         identity: String? = null,
         traits: List<Trait>? = null,
-        transient: Boolean = false
+        transient: Boolean = false,
+        forceRefresh: Boolean = false
     ): Result<List<Flag>> {
         // Save the last used identity as we'll refresh with this if we get update events
         lastUsedIdentity = identity
@@ -111,14 +112,14 @@ class Flagsmith internal constructor(
                 flagSmithApi.postTraits(IdentityAndTraits(identity, traits, transient))
                     .map { it.flags }
             } else {
-                flagSmithApi.getIdentityFlagsAndTraits(identity, transient)
+                flagSmithApi.getIdentityFlagsAndTraits(identity, transient, forceRefresh = forceRefresh)
                     .map { it.flags }
             }
         } else {
             if (traits != null) {
                 throw IllegalArgumentException("Cannot set traits without an identity");
             } else {
-                flagSmithApi.getFlags()
+                flagSmithApi.getFlags(forceRefresh = forceRefresh)
             }
         }
             .recoverCatching { defaultFlags.ifEmpty { throw it } }

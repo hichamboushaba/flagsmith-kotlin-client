@@ -53,6 +53,15 @@ fun ClientAndServer.mockResponseFor(endpoint: MockEndpoint) {
         )
 }
 
+fun ClientAndServer.mockResponseFor(path: String, body: String) {
+    `when`(request().withPath(path), Times.once())
+        .respond(
+            response()
+                .withContentType(MediaType.APPLICATION_JSON)
+                .withBody(body)
+        )
+}
+
 fun ClientAndServer.mockDelayFor(endpoint: MockEndpoint) {
     `when`(request().withPath(endpoint.path), Times.once())
         .respond(
