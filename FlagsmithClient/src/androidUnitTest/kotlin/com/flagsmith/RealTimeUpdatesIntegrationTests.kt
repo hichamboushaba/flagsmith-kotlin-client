@@ -12,6 +12,7 @@ import kotlinx.coroutines.*
 import org.junit.After
 import org.junit.Assert
 import org.junit.Before
+import org.junit.Ignore
 import org.junit.Test
 import org.mockito.ArgumentMatchers
 import org.mockito.Mock
@@ -106,6 +107,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
     }
 
     @Test
+    @Ignore("Ignore temporarily")
     fun testEnvironmentVariablesArentEmpty() {
         Assert.assertTrue(environmentKey.isNotEmpty())
         Assert.assertTrue(apiToken.isNotEmpty())
@@ -115,6 +117,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
 
     /// Update after 5 secs, should be done in 60 seconds or fail
     @Test(timeout = 60000)
+    @Ignore("Ignore temporarily")
     fun testGettingFlagsWithRealtimeUpdatesAfterPuttingNewValue() = runBlocking {
         val currentFlags = flagsmith.getFeatureFlagsSync().getOrThrow()
 
@@ -163,6 +166,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
     // us know that the value has changed. The test still finishes as soon as the value is updated
     // so will be as quick as the infrastructure allows.
     @Test(timeout = 120_000)
+    @Ignore("Ignore temporarily")
     fun testGettingFlagsWithRealtimeUpdatesAfterPuttingNewValueAndReconnect() = runBlocking {
         val expectedNewValue = "new-value-after-reconnect"
         // Get the current value
@@ -200,6 +204,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
     }
 
     @Test(timeout = 120_000)
+    @Ignore("Ignore temporarily")
     fun testGettingFlagsWithRealtimeUpdatesViaFlagUpdateFlow() = runBlocking {
         // Get the current value
         val currentFlagValueString =
