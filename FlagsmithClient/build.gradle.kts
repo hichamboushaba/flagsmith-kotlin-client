@@ -1,4 +1,3 @@
-import com.android.build.gradle.internal.ide.kmp.KotlinAndroidSourceSetMarker.Companion.android
 import groovy.time.TimeCategory
 import kotlinx.kover.api.CounterType
 import kotlinx.kover.api.VerificationTarget
@@ -7,7 +6,7 @@ import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 import java.io.ByteArrayOutputStream
 import java.lang.System.getenv
-import java.util.Date
+import java.util.*
 
 plugins {
     alias(libs.plugins.androidGradleLibrary)
@@ -238,16 +237,6 @@ fun tableLine(length: Int, leading: String, trailing: String) =
     "─".repeat(length - 2).wrapWith(leading, trailing)
 
 publishing {
-    publications {
-        create<MavenPublication>("maven") {
-            groupId = "dev.hichamboushaba"
-            artifactId = "flagsmith-kotlin-client"
-            version = versionNumber
-
-            from(components["kotlin"])
-        }
-    }
-
     repositories {
         maven {
             name = "github"
