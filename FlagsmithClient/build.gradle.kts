@@ -31,6 +31,8 @@ val versionNumber: String by lazy {
 
 kotlin {
     androidTarget {
+        publishLibraryVariants("release", "debug")
+
         compilations.all {
             kotlinOptions {
                 jvmTarget = JavaVersion.VERSION_11.toString()
