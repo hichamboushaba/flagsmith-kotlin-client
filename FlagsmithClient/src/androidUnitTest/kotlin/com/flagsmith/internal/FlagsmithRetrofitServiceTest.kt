@@ -1,58 +1,61 @@
 package com.flagsmith.internal
 
-import android.content.Context
-import com.flagsmith.FlagsmithCacheConfig
+import com.flagsmith.defaultJson
 import com.flagsmith.entities.FeatureStatePutBody
-import com.flagsmith.internal.http.RetrofitBuilder
-import kotlinx.serialization.json.Json
-import retrofit2.Call
-import retrofit2.http.Body
-import retrofit2.http.GET
-import retrofit2.http.Header
-import retrofit2.http.PUT
-import retrofit2.http.Path
-import retrofit2.http.Query
+import io.ktor.client.*
+import io.ktor.client.call.*
+import io.ktor.client.plugins.*
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.plugins.logging.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
 
-interface FlagsmithRetrofitServiceTest {
+internal class FlagsmithKtorServiceTest(
+    private val baseUrl: String,
+    private val environmentKey: String
+) {
+    private val httpClient = HttpClient {
+        install(ContentNegotiation) {
+            json(defaultJson)
+        }
 
-    @GET("environments/{environmentKey}/featurestates/{featureStateId}/")
-    fun getFeatureStates(@Header("authorization") authToken:String,
-                         @Path("featureStateId") featureStateId: String,
-                         @Path("environmentKey") environmentKey: String,
-                         @Query("feature_name") featureName: String) : Call<String>
+        install(Logging) {
+            this.logger = Logger.SIMPLE
+            this.level = LogLevel.ALL
+        }
 
-    @PUT("environments/{environmentKey}/featurestates/{featureStateId}/")
-    fun setFeatureStates(@Header("authorization") authToken:String,
-                         @Path("featureStateId") featureStateId: String,
-                         @Path("environmentKey") environmentKey: String,
-                         @Body body: FeatureStatePutBody
-    ) : Call<Unit>
+        expectSuccess = true
 
-    @Suppress("UNCHECKED_CAST")
-    companion object {
-        fun create(
-            baseUrl: String,
-            environmentKey: String,
-            context: Context?,
-            cacheConfig: FlagsmithCacheConfig,
-            requestTimeoutSeconds: Long,
-            readTimeoutSeconds: Long,
-            writeTimeoutSeconds: Long,
-            timeTracker: FlagsmithEventTimeTracker,
-            json: Json
-        ): FlagsmithRetrofitServiceTest {
-            val (retrofit, _) = RetrofitBuilder.build(
-                baseUrl = baseUrl,
-                environmentKey = environmentKey,
-                cacheConfig = cacheConfig,
-                requestTimeoutSeconds = requestTimeoutSeconds,
-                readTimeoutSeconds = readTimeoutSeconds,
-                writeTimeoutSeconds = writeTimeoutSeconds,
-                timeTracker = timeTracker,
-                json = json
-            )
+        defaultRequest {
+            url(baseUrl)
+            contentType(ContentType.Application.Json)
+            header("X-Environment-Key", environmentKey)
+        }
+    }
 
-            return retrofit.create(FlagsmithRetrofitServiceTest::class.java)
+    suspend fun getFeatureStates(
+        authToken: String,
+        featureStateId: String,
+        environmentKey: String,
+        featureName: String
+    ): String {
+        return httpClient.get("environments/${environmentKey}/featurestates/${featureStateId}/") {
+            header("authorization", authToken)
+            parameter("feature_name", featureName)
+        }.body()
+    }
+
+    suspend fun setFeatureStates(
+        authToken: String,
+        featureStateId: String,
+        environmentKey: String,
+        body: FeatureStatePutBody
+    ) {
+        httpClient.put("environments/${environmentKey}/featurestates/${featureStateId}/") {
+            header("authorization", authToken)
+            setBody(body)
         }
     }
 }

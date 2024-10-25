@@ -77,8 +77,8 @@ operator fun Flagsmith.Companion.invoke(
         writeTimeoutSeconds = writeTimeoutSeconds,
         lastFlagFetchTime = lastFlagFetchTime,
         coroutineScope = coroutineScope,
-        flagsmithApiFactory = RetrofitFlagsmithApi,
-        flagsmithEventApiFactory = RetrofitFlagsmithEventApi,
+        flagsmithApiFactory = KtorFlagsmithApi,
+        flagsmithEventApiFactory = KtorFlagsmithEventApi,
         flagsmithAnalyticsFactory = DefaultFlagsmithAnalytics
     )
 }

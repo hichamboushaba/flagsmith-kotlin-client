@@ -66,12 +66,6 @@ kotlin {
 
         val androidMain by getting {
             dependencies {
-                // Retrofit
-                implementation(libs.retrofit)
-                implementation(libs.retrofit.converter.kotlinxSerialization)
-                implementation(libs.okhttp.sse)
-
-                // Ktor
                 implementation(libs.ktor.client.okhttp)
 
                 implementation(libs.androidx.startup)
@@ -79,8 +73,6 @@ kotlin {
         }
         val androidUnitTest by getting {
             dependencies {
-                implementation(libs.okhttp.sse)
-
                 implementation(libs.junit)
                 implementation(libs.kotlinx.coroutines.test)
                 implementation(libs.mockserver.netty)

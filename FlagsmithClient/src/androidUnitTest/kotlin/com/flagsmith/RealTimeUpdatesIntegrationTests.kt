@@ -7,7 +7,7 @@ import android.graphics.Color
 import com.flagsmith.entities.FeatureStatePutBody
 import com.flagsmith.entities.Flag
 import com.flagsmith.internal.FlagsmithEventTimeTracker
-import com.flagsmith.internal.FlagsmithRetrofitServiceTest
+import com.flagsmith.internal.FlagsmithKtorServiceTest
 import kotlinx.coroutines.*
 import org.junit.After
 import org.junit.Assert
@@ -23,8 +23,9 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
 
     private lateinit var flagsmith: Flagsmith
 
-    private lateinit var retrofitService: FlagsmithRetrofitServiceTest
+    private lateinit var ktorService: FlagsmithKtorServiceTest
 
+    private val baseUrl = "https://api.flagsmith.com/api/v1/"
     // You'll need a valid account to test this
     private val environmentKey = System.getenv("INTEGRATION_TESTS_ENVIRONMENT_KEY")
         ?: throw Exception("INTEGRATION_TESTS_ENVIRONMENT_KEY not set")
@@ -55,7 +56,8 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
         // We need the cache configured in the integration tests, otherwise we'd be getting
         // the new values from the server all the time rather than seeing the values from the realtime update stream
         flagsmith = Flagsmith(
-            environmentKey = environmentKey!!,
+            baseUrl = baseUrl,
+            environmentKey = environmentKey,
             enableAnalytics = false,
             cacheConfig = FlagsmithCacheConfig(
                 enableCache = true,
@@ -64,21 +66,15 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
             enableRealtimeUpdates = true
         )
 
-        val requestTimeoutSeconds: Long = 4L
-        val readTimeoutSeconds: Long = 6L
-        val writeTimeoutSeconds: Long = 6L
-
-        retrofitService = FlagsmithRetrofitServiceTest.create(
-            baseUrl = "https://api.flagsmith.com/api/v1/", environmentKey = environmentKey, context = mockApplicationContext,
-            cacheConfig = FlagsmithCacheConfig(enableCache = false),
-            timeTracker = this, requestTimeoutSeconds = requestTimeoutSeconds, readTimeoutSeconds = readTimeoutSeconds,
-            writeTimeoutSeconds = writeTimeoutSeconds, json = defaultJson
+        ktorService = FlagsmithKtorServiceTest(
+            baseUrl = baseUrl,
+            environmentKey = environmentKey
         )
     }
 
     @After
     fun tearDown() {
-        runBlocking {  flagsmith.clearCache() }
+        runBlocking { flagsmith.clearCache() }
     }
 
     private fun setupMocks() {
@@ -130,12 +126,13 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
             // Wait 5 seconds before updating the value
             delay(5000)
 
-            val response = retrofitService
-                .setFeatureStates(authToken, featureStateId,
-                    environmentKey!!, FeatureStatePutBody(!currentFlag.enabled, "new-value"))
-                .execute()
-
-            Assert.assertTrue("Response should be successful: $response", response.isSuccessful)
+            ktorService
+                .setFeatureStates(
+                    authToken = authToken,
+                    featureStateId = featureStateId,
+                    environmentKey = environmentKey,
+                    body = FeatureStatePutBody(!currentFlag.enabled, "new-value")
+                )
         }
 
         var newUpdatedEnabledStatus: Boolean? = null
@@ -149,12 +146,13 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
 
         // Now we need to make sure that the feature is enabled as it'll cause issues with some of the other tests
         CoroutineScope(Dispatchers.IO).launch {
-            val response = retrofitService
-                .setFeatureStates(authToken, featureStateId,
-                    environmentKey!!, FeatureStatePutBody(true, "new-value"))
-                .execute()
-
-            Assert.assertTrue("Response should be successful: $response", response.isSuccessful)
+            ktorService
+                .setFeatureStates(
+                    authToken = authToken,
+                    featureStateId = featureStateId,
+                    environmentKey = environmentKey,
+                    body = FeatureStatePutBody(true, "new-value")
+                )
         }
         flagsmith.close()
         return@runBlocking
@@ -177,11 +175,13 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
             // So try again 5 seconds later
             delay(35000)
 
-            val response = retrofitService
-                .setFeatureStates(authToken, featureStateId, environmentKey, FeatureStatePutBody(true, expectedNewValue))
-                .execute()
-
-            Assert.assertTrue("Response should be successful: $response", response.isSuccessful)
+            ktorService
+                .setFeatureStates(
+                    authToken = authToken,
+                    featureStateId = featureStateId,
+                    environmentKey = environmentKey,
+                    body = FeatureStatePutBody(true, expectedNewValue)
+                )
         }
 
         var newUpdatedFeatureValue: String? = ""
@@ -211,11 +211,13 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
             // Wait 5 seconds before updating the value
             delay(5000)
 
-            val response = retrofitService
-                .setFeatureStates(authToken, featureStateId, environmentKey!!, FeatureStatePutBody(true, "new-value-via-flow"))
-                .execute()
-
-            Assert.assertTrue("Response should be successful: $response", response.isSuccessful)
+            ktorService
+                .setFeatureStates(
+                    authToken = authToken,
+                    featureStateId = featureStateId,
+                    environmentKey = environmentKey,
+                    body = FeatureStatePutBody(true, "new-value-via-flow")
+                )
         }
 
         var newUpdatedFeatureValue: String?
@@ -224,7 +226,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
             newUpdatedFeatureValue = flagsmith.flagUpdateFlow.value
                 .find { flag -> flag.feature.name == featureId }?.featureStateValue as String? ?: ""
             delay(300L) // Delay a little while to give the CPU some time back
-        } while (newUpdatedFeatureValue.isNullOrEmpty() ||  newUpdatedFeatureValue == currentFlagValueString)
+        } while (newUpdatedFeatureValue.isNullOrEmpty() || newUpdatedFeatureValue == currentFlagValueString)
 
         Assert.assertEquals("new-value-via-flow", newUpdatedFeatureValue)
         flagsmith.close()

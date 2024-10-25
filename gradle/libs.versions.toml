@@ -9,9 +9,7 @@ ktor = "3.0.0"
 mockitoKotlin = "5.0.0"
 mockserverNetty = "5.14.0"
 multiplatform-settings = "1.2.0"
-okhttpSse = "4.11.0"
 okio = "3.9.1"
-retrofit = "2.11.0"
 
 [libraries]
 androidx-startup = { module = "androidx.startup:startup-runtime", version.ref = "androidx-startup" }
@@ -31,10 +29,7 @@ mockito-kotlin = { module = "org.mockito.kotlin:mockito-kotlin", version.ref = "
 mockserver-netty = { module = "org.mock-server:mockserver-netty-no-dependencies", version.ref = "mockserverNetty" }
 multiplatform-settings = { module = "com.russhwolf:multiplatform-settings", version.ref = "multiplatform-settings" }
 multiplatform-settings-serialization = { module = "com.russhwolf:multiplatform-settings-serialization", version.ref = "multiplatform-settings" }
-okhttp-sse = { module = "com.squareup.okhttp3:okhttp-sse", version.ref = "okhttpSse" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
-retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
-retrofit-converter-kotlinxSerialization = { module = "com.squareup.retrofit2:converter-kotlinx-serialization", version.ref = "retrofit" }
 
 [plugins]
 androidGradleApplication = { id = "com.android.application", version = "8.2.2" }
