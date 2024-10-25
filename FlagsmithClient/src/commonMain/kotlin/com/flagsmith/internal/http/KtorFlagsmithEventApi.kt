@@ -28,7 +28,6 @@ internal class KtorFlagsmithEventApi(
 ) : FlagsmithEventApi {
 
     override fun observeEvents(): Flow<FlagEvent> {
-        val sseUrl = """https://sse.dev/test?jsonobj={"updated_at":${GMTDate().timestamp}}"""
         return flow {
             httpClient.serverSentEvents(sseUrl) {
                 emitAll(
