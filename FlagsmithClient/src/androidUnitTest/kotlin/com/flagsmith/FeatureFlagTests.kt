@@ -141,14 +141,14 @@ class FeatureFlagTests {
 
     @Test
     fun testThrowsExceptionWhenCreatingAnalyticsWithoutAContext() {
-        val exception = assertThrows(IllegalArgumentException::class.java) {
+        val exception = assertThrows(IllegalStateException::class.java) {
             flagsmith = Flagsmith(
                 environmentKey = "",
                 baseUrl = "http://localhost:${mockServer.localPort}",
                 enableAnalytics = true
             )
         }
-        assertEquals("Analytics is enabled but no analytics factory was provided", exception.message)
+        assertEquals("App context not initialized, is the ContextInitializer disabled?", exception.message)
     }
 
     @Test
