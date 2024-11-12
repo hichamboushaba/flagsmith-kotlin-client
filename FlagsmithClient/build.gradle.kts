@@ -25,7 +25,12 @@ val versionNumber: String by lazy {
         errorOutput = ByteArrayOutputStream()
     }
     val version = stdout.toString().trim().replace("v", "")
-    return@lazy version.ifEmpty { "0.1.0" }
+    return@lazy version.ifEmpty {
+        logger.quiet("No git tags found, using 0.1.0 as the version")
+        "0.1.0"
+    }.also {
+        logger.quiet("Version number: $it")
+    }
 }
 
 group = "dev.hichamboushaba"
