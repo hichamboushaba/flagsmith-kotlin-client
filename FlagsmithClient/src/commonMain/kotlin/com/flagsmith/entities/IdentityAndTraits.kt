@@ -7,5 +7,5 @@ import kotlinx.serialization.Serializable
 data class IdentityAndTraits(
     @SerialName(value = "identifier") val identifier: String,
     @SerialName(value = "traits") val traits: List<Trait>,
-    @SerialName(value = "transient") val transient: Boolean? = null
+    @SerialName(value = "transient") val transient: Boolean = false
 )
