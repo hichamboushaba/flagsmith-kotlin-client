@@ -117,7 +117,7 @@ internal class KtorFlagsmithApi(
 
                 install(Logging) {
                     this.logger = Logger.SIMPLE
-                    this.level = LogLevel.ALL
+                    this.level = LogLevel.INFO // TODO: allow to set log level
                 }
 
                 if (cache != null) {
