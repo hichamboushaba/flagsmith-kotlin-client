@@ -125,8 +125,8 @@ class Flagsmith internal constructor(
             }
         }
             .recoverCatching { defaultFlags.ifEmpty { throw it } }
-            .also { res ->
-                flagUpdateFlow.tryEmit(res.getOrNull() ?: emptyList())
+            .onSuccess { flags ->
+                flagUpdateFlow.value = flags
             }
     }
 
@@ -177,6 +177,7 @@ class Flagsmith internal constructor(
 
     suspend fun setTraits(traits: List<Trait>, identity: String): Result<List<TraitWithIdentity>> {
         return flagSmithApi.postTraits(IdentityAndTraits(identity, traits))
+            .onSuccess { flagUpdateFlow.value = it.flags }
             .map { response ->
                 response.traits.map { trait ->
                     TraitWithIdentity(
