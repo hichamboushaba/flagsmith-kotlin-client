@@ -10,7 +10,7 @@ import kotlinx.serialization.json.Json
 internal interface FlagsmithApi {
     suspend fun getIdentityFlagsAndTraits(
         identity: String,
-        transient: Boolean = false,
+        transient: Boolean? = null,
         forceRefresh: Boolean = false
     ): Result<IdentityFlagsAndTraits>
 

@@ -28,7 +28,7 @@ internal class KtorFlagsmithApi(
 ) : FlagsmithApi {
     override suspend fun getIdentityFlagsAndTraits(
         identity: String,
-        transient: Boolean,
+        transient: Boolean?,
         forceRefresh: Boolean
     ): Result<IdentityFlagsAndTraits> = httpClient.getWithCacheIfEnabled(
         url = "identities/",

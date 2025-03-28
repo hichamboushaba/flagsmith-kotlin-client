@@ -112,7 +112,9 @@ class Flagsmith internal constructor(
                 flagSmithApi.postTraits(IdentityAndTraits(identity, traits, transient))
                     .map { it.flags }
             } else {
-                flagSmithApi.getIdentityFlagsAndTraits(identity, transient, forceRefresh = forceRefresh)
+                // Pass transient flag only if it's true
+                // TODO: revisit this when https://github.com/Flagsmith/flagsmith/issues/5260 is resolved
+                flagSmithApi.getIdentityFlagsAndTraits(identity, transient.takeIf { it }, forceRefresh = forceRefresh)
                     .map { it.flags }
             }
         } else {
