@@ -1,7 +1,11 @@
 <img width="100%" src="https://github.com/Flagsmith/flagsmith/raw/main/static-files/hero.png"/>
 
-[![Download](https://img.shields.io/maven-central/v/com.flagsmith/flagsmith-kotlin-android-client)](https://mvnrepository.com/artifact/com.flagsmith/flagsmith-kotlin-android-client)
-![build](https://github.com/Flagsmith/flagsmith-kotlin-android-client/actions/workflows/verify.yml/badge.svg)
+# Flagsmith Kotlin Client
+A Flagsmith client for Kotlin Multiplatform, based on the original client from Flagsmith team for Android.
+
+---------
+
+Below is the README of the original library
 
 # Flagsmith Kotlin Android Client
 
