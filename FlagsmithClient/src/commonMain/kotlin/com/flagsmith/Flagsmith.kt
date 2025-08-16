@@ -169,6 +169,9 @@ class Flagsmith internal constructor(
 
     suspend fun setTrait(trait: Trait, identity: String): Result<TraitWithIdentity> {
         return flagSmithApi.postTraits(IdentityAndTraits(identity, listOf(trait)))
+            .onSuccess {
+                flagUpdateFlow.value = it.flags
+            }
             .map { response ->
                 TraitWithIdentity(
                     key = response.traits.first().key,
