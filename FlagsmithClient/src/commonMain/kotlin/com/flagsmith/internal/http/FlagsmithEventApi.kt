@@ -7,6 +7,10 @@ internal interface FlagsmithEventApi {
     fun observeEvents(): Flow<FlagEvent>
 
     interface Factory {
-        fun create(sseUrl: String, environmentKey: String): FlagsmithEventApi
+        fun create(
+            sseUrl: String,
+            environmentKey: String,
+            userAgentOverride: String?
+        ): FlagsmithEventApi
     }
 }

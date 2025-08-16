@@ -2,13 +2,15 @@ package com.flagsmith.internal.http
 
 import com.flagsmith.defaultJson
 import com.flagsmith.entities.FlagEvent
-import io.ktor.client.*
-import io.ktor.client.plugins.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.plugins.sse.*
-import io.ktor.client.request.*
-import io.ktor.serialization.kotlinx.json.*
-import io.ktor.util.date.*
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.UserAgent
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.plugins.sse.SSE
+import io.ktor.client.plugins.sse.serverSentEvents
+import io.ktor.client.request.header
+import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
@@ -42,7 +44,11 @@ internal class KtorFlagsmithEventApi(
     }
 
     companion object : FlagsmithEventApi.Factory {
-        override fun create(sseUrl: String, environmentKey: String): FlagsmithEventApi {
+        override fun create(
+            sseUrl: String,
+            environmentKey: String,
+            userAgentOverride: String?,
+        ): FlagsmithEventApi {
             val httpClient = HttpClient {
                 install(HttpTimeout) {
                     connectTimeoutMillis = 6000
@@ -54,6 +60,12 @@ internal class KtorFlagsmithEventApi(
 
                 install(ContentNegotiation) {
                     json(defaultJson)
+                }
+
+                userAgentOverride?.let { userAgentOverride ->
+                    install(UserAgent) {
+                        agent = userAgentOverride
+                    }
                 }
 
                 defaultRequest {

@@ -24,6 +24,7 @@ internal interface FlagsmithApi {
         fun create(
             baseUrl: String,
             environmentKey: String,
+            userAgentOverride: String?,
             cacheConfig: FlagsmithCacheConfig,
             requestTimeoutSeconds: Long,
             readTimeoutSeconds: Long,

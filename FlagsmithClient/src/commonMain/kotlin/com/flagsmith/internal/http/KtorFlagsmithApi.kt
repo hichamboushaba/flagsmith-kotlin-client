@@ -99,6 +99,7 @@ internal class KtorFlagsmithApi(
         override fun create(
             baseUrl: String,
             environmentKey: String,
+            userAgentOverride: String?,
             cacheConfig: FlagsmithCacheConfig,
             requestTimeoutSeconds: Long,
             readTimeoutSeconds: Long,
@@ -129,6 +130,12 @@ internal class KtorFlagsmithApi(
                 install(HttpTimeout) {
                     this.requestTimeoutMillis = requestTimeoutSeconds * 1000
                     this.socketTimeoutMillis = readTimeoutSeconds * 1000
+                }
+
+                userAgentOverride?.let { userAgentOverride ->
+                    install(UserAgent) {
+                        agent = userAgentOverride
+                    }
                 }
 
                 expectSuccess = true

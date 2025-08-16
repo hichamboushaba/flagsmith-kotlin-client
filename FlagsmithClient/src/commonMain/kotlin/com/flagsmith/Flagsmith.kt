@@ -28,6 +28,7 @@ class Flagsmith internal constructor(
     private val baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
     private val eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
     private val enableAnalytics: Boolean = DEFAULT_ENABLE_ANALYTICS,
+    private val userAgentOverride: String? = null,
     private val enableRealtimeUpdates: Boolean = false,
     private val analyticsFlushPeriod: Int = DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS,
     private val cacheConfig: FlagsmithCacheConfig = FlagsmithCacheConfig(),
@@ -46,8 +47,9 @@ class Flagsmith internal constructor(
     } else {
         FlagsmithEventService(
             eventSourceBaseUrl = eventSourceBaseUrl,
-            flagsmithEventApiFactory = flagsmithEventApiFactory,
-            environmentKey = environmentKey
+            environmentKey = environmentKey,
+            userAgentOverride = userAgentOverride,
+            flagsmithEventApiFactory = flagsmithEventApiFactory
         )
     }
     private var sseUpdatesJob: Job? = null
@@ -75,6 +77,7 @@ class Flagsmith internal constructor(
         flagsmithApiFactory.create(
             baseUrl = baseUrl,
             environmentKey = environmentKey,
+            userAgentOverride = userAgentOverride,
             cacheConfig = cacheConfig,
             requestTimeoutSeconds = requestTimeoutSeconds,
             readTimeoutSeconds = readTimeoutSeconds,
@@ -258,6 +261,7 @@ class Flagsmith internal constructor(
             environmentKey: String,
             baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
             eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
+            userAgentOverride: String? = null,
             enableAnalytics: Boolean = DEFAULT_ENABLE_ANALYTICS,
             enableRealtimeUpdates: Boolean = false,
             analyticsFlushPeriod: Int = DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS,
@@ -272,6 +276,7 @@ class Flagsmith internal constructor(
             environmentKey = environmentKey,
             baseUrl = baseUrl,
             eventSourceBaseUrl = eventSourceBaseUrl,
+            userAgentOverride = userAgentOverride,
             enableAnalytics = enableAnalytics,
             enableRealtimeUpdates = enableRealtimeUpdates,
             analyticsFlushPeriod = analyticsFlushPeriod,
