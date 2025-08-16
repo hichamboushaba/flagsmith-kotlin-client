@@ -1,7 +1,7 @@
 <img width="100%" src="https://github.com/Flagsmith/flagsmith/raw/main/static-files/hero.png"/>
 
 # Flagsmith Kotlin Client
-A Flagsmith client for Kotlin Multiplatform, based on the original client from Flagsmith team for Android.
+This is a fork of the original flagsmith Android client, updated to work with Kotlin multiplatform. It supports Android, iOS, and JVM platforms.
 
 ---------
 
