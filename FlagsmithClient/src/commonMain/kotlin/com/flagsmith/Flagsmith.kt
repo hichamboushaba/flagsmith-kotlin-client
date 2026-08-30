@@ -8,6 +8,7 @@ import com.flagsmith.internal.LastKnownFlagsStore
 import com.flagsmith.internal.http.ClearableHttpCache
 import com.flagsmith.internal.http.FlagsmithApi
 import com.flagsmith.internal.http.FlagsmithEventApi
+import io.ktor.util.date.getTimeMillis
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,7 +52,8 @@ class Flagsmith internal constructor(
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
     flagsmithApiFactory: FlagsmithApi.Factory,
     flagsmithEventApiFactory: FlagsmithEventApi.Factory?,
-    flagsmithAnalyticsFactory: FlagsmithAnalytics.Factory?
+    flagsmithAnalyticsFactory: FlagsmithAnalytics.Factory?,
+    internal val nowMillis: () -> Long = ::getTimeMillis,
 ) : FlagsmithEventTimeTracker {
     private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates || flagsmithEventApiFactory == null) {
         null
@@ -91,8 +93,22 @@ class Flagsmith internal constructor(
                 scope = LastKnownFlagsStore.Scope(baseUrl, environmentKey, identity),
                 ttlSeconds = cacheConfig.cacheTTLSeconds,
                 acceptStale = cacheConfig.acceptStaleCache,
+                nowMillis = nowMillis,
             )
         } else null
+
+    /**
+     * Result of the one-time priming read: the flags that [flagsState] starts with, and the
+     * timestamp (epoch millis) the snapshot was written at — `0L` when there was no valid
+     * snapshot. Used to seed [lastSuccessfulFetchAtMillis] so the TTL gate is warm after process
+     * death, exactly as it was warm from the previous session's last fetch.
+     */
+    private class Primed(val flags: List<Flag>, val fetchedAtMillis: Long)
+
+    private val primed: Primed by lazy {
+        lastKnownFlagsStore?.readIfValid()
+            .let { Primed(it?.flags ?: defaultFlags, it?.savedAtEpochSeconds?.times(1000) ?: 0L) }
+    }
 
     /**
      * Backing state of [flagUpdateFlow]. Primed lazily on first access: either from the
@@ -101,16 +117,27 @@ class Flagsmith internal constructor(
      * that goes through [flagsState].
      */
     private val flagsState: MutableStateFlow<List<Flag>> by lazy {
-        MutableStateFlow(lastKnownFlagsStore?.readIfValid() ?: defaultFlags)
+        MutableStateFlow(primed.flags)
     }
 
     /** The most recently known flags: primed from disk on first access, then updated by every successful fetch. */
     val flagUpdateFlow: StateFlow<List<Flag>> get() = flagsState
 
-    // Guards [seqCounter], [lastAppliedSeq] and the [flagsState] write. Never held across IO.
+    // Guards [seqCounter], [lastAppliedSeq], [lastSuccessfulFetchAtMillis] and the [flagsState]
+    // write. Never held across IO.
     private val stateMutex = Mutex()
     private var seqCounter = 0L // guarded by stateMutex
     private var lastAppliedSeq = 0L // guarded by stateMutex
+
+    // Local fetch clock for the TTL gate: when we last applied a successful flag document.
+    // Three states: null = not yet resolved (falls back to the primed snapshot time),
+    // 0L = known-none (cleared), >0 = known. Never use [lastFlagFetchTime] here — that is the
+    // server's document timestamp and keeps SSE state.
+    private var lastSuccessfulFetchAtMillis: Long? = null // guarded by stateMutex
+
+    /** Call only while holding [stateMutex]. */
+    private fun fetchedAtMillisLocked(): Long =
+        lastSuccessfulFetchAtMillis ?: primed.fetchedAtMillis.also { lastSuccessfulFetchAtMillis = it }
 
     /** Allocates the ordering token for a flag-producing operation. Called at operation entry. */
     private suspend fun beginOperation(): Long = stateMutex.withLock { ++seqCounter }
@@ -126,6 +153,7 @@ class Flagsmith internal constructor(
                 false
             } else {
                 lastAppliedSeq = seq
+                lastSuccessfulFetchAtMillis = nowMillis()
                 flagsState.value = flags
                 true
             }
@@ -172,6 +200,20 @@ class Flagsmith internal constructor(
         transient: Boolean = false,
         forceRefresh: Boolean = false
     ): Result<List<Flag>> {
+        // In-memory TTL gate: within [FlagsmithCacheConfig.cacheTTLSeconds] of the last successful
+        // fetch, answer from [flagsState] without touching Ktor at all. The exclusions are
+        // load-bearing: `traits != null` is a POST (a write), `transient = true` is a distinct
+        // server-side semantic that must never be served from persisted state, and
+        // `enableCache = false` must keep meaning "always fetch".
+        if (cacheConfig.enableCache && !forceRefresh && traits == null && !transient) {
+            stateMutex.withLock {
+                val fetchedAt = fetchedAtMillisLocked()
+                val age = nowMillis() - fetchedAt
+                val ttlMillis = cacheConfig.cacheTTLSeconds.coerceAtMost(Long.MAX_VALUE / 1000) * 1000
+                if (fetchedAt > 0L && age in 0..ttlMillis) flagsState.value else null
+            }?.let { return Result.success(it) }
+        }
+
         val seq = beginOperation()
 
         val result = if (identity != null) {
@@ -193,13 +235,21 @@ class Flagsmith internal constructor(
             }
         }
 
-        // Emit and persist BEFORE falling back to defaults: a defaults fallback must never
+        // Emit and persist BEFORE falling back: a defaults fallback must never
         // overwrite the last-known flags in the flow, nor reach the disk snapshot.
         if (result.isSuccess) {
             applyFlags(result.getOrThrow(), seq, persist = !transient)
         }
 
-        return result.recoverCatching { defaultFlags.ifEmpty { throw it } }
+        return result.recoverCatching { error ->
+            val known = stateMutex.withLock { fetchedAtMillisLocked() > 0L }
+            if (cacheConfig.acceptStaleCache && known) {
+                // Serve the last-known document, even when it is legitimately empty.
+                flagsState.value
+            } else {
+                defaultFlags.ifEmpty { throw error }
+            }
+        }
     }
 
     suspend fun hasFeatureFlag(
@@ -261,9 +311,15 @@ class Flagsmith internal constructor(
 
     suspend fun clearCache() {
         // Barrier: anything started before this call is superseded and can neither reach the flow
-        // nor the disk snapshot afterwards. flagUpdateFlow's current value is deliberately left
-        // as-is: clearCache clears persisted state, matching the pre-existing behaviour.
-        val barrier = stateMutex.withLock { lastAppliedSeq = seqCounter; seqCounter }
+        // nor the disk snapshot afterwards. The flow and the TTL clock are reset too: once
+        // stale-serve reads [flagsState], leaving it populated would mean "clear the cache"
+        // doesn't clear.
+        val barrier = stateMutex.withLock {
+            lastAppliedSeq = seqCounter
+            lastSuccessfulFetchAtMillis = 0L
+            flagsState.value = defaultFlags
+            seqCounter
+        }
         try {
             cache?.invalidate()
         } catch (e: Exception) {
@@ -316,8 +372,10 @@ class Flagsmith internal constructor(
                 cache?.invalidate()
                 lastFlagFetchTime = lastEventUpdate
 
-                // Now we can get the new values, which will automatically be emitted to the flagUpdateFlow
-                getFeatureFlags { res ->
+                // Now we can get the new values, which will automatically be emitted to the
+                // flagUpdateFlow. forceRefresh bypasses the TTL gate: an SSE event means the
+                // server state changed, so the cached document must not be served.
+                getFeatureFlags(forceRefresh = true) { res ->
                     if (res.isFailure) {
                         // TODO: provide a logging mechanism
                         println("Error getting flags in SSE stream: ${res.exceptionOrNull()}")

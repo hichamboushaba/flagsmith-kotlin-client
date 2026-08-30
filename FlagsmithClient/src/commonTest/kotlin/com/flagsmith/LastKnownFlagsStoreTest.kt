@@ -65,7 +65,10 @@ class LastKnownFlagsStoreTest {
 
         val loaded = s.readIfValid()
         assertNotNull(loaded)
-        assertEquals(sampleFlags, loaded)
+        assertEquals(sampleFlags, loaded.flags)
+        // The snapshot timestamp must round-trip so the TTL gate can be seeded after process
+        // death. 1000 = nowMillis()/1000 with the fixed test clock of 1_000_000.
+        assertEquals(1000L, loaded.savedAtEpochSeconds)
     }
 
     @Test
@@ -114,7 +117,7 @@ class LastKnownFlagsStoreTest {
 
         // Same instant with stale acceptance: served.
         val staleStore = store(fs, ttlSeconds = 3600, acceptStale = true) { writtenAt + 4_000_000 }
-        assertEquals(sampleFlags, staleStore.readIfValid())
+        assertEquals(sampleFlags, staleStore.readIfValid()?.flags)
     }
 
     @Test
@@ -123,7 +126,7 @@ class LastKnownFlagsStoreTest {
         store(fs, ttlSeconds = 3600).write(sampleFlags, seq = 1)
 
         val laterStore = store(fs, ttlSeconds = 3600) { now + 3_600_000 }
-        assertEquals(sampleFlags, laterStore.readIfValid())
+        assertEquals(sampleFlags, laterStore.readIfValid()?.flags)
     }
 
     @Test
@@ -133,7 +136,7 @@ class LastKnownFlagsStoreTest {
 
         // "Now" before the write instant: age must clamp to 0 and stay eligible.
         val storeAfterClockJump = store(fs, ttlSeconds = 3600) { now - 10_000_000 }
-        assertEquals(sampleFlags, storeAfterClockJump.readIfValid())
+        assertEquals(sampleFlags, storeAfterClockJump.readIfValid()?.flags)
     }
 
     @Test
@@ -168,7 +171,7 @@ class LastKnownFlagsStoreTest {
         s.write(newer, seq = 2)
         s.write(older, seq = 1)
 
-        assertEquals(newer, s.readIfValid())
+        assertEquals(newer, s.readIfValid()?.flags)
     }
 
     @Test
@@ -190,7 +193,7 @@ class LastKnownFlagsStoreTest {
         // A write started after the clear (seq > barrier) is accepted.
         val afterClear = listOf(flag("after-clear", 9.0))
         s.write(afterClear, seq = 6)
-        assertEquals(afterClear, s.readIfValid())
+        assertEquals(afterClear, s.readIfValid()?.flags)
     }
 
     @Test
@@ -204,7 +207,7 @@ class LastKnownFlagsStoreTest {
         assertTrue(fs.exists(personStore.file))
         assertNotEquals(personStore.file, envStore.file)
         assertNull(envStore.readIfValid())
-        assertEquals(sampleFlags, personStore.readIfValid())
+        assertEquals(sampleFlags, personStore.readIfValid()?.flags)
     }
 
     @Test

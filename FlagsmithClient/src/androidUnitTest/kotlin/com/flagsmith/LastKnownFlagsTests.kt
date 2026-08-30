@@ -6,6 +6,7 @@ import com.flagsmith.mockResponses.MockEndpoint
 import com.flagsmith.mockResponses.mockDelayFor
 import com.flagsmith.mockResponses.mockFailureFor
 import com.flagsmith.mockResponses.mockResponseFor
+import io.ktor.util.date.getTimeMillis
 import kotlinx.coroutines.runBlocking
 import org.awaitility.Awaitility
 import org.awaitility.kotlin.await
@@ -21,6 +22,9 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val LAST_KNOWN_CACHE_DIR = "cache-last-known"
+
+/** How far past the 3600s TTL the injected clock is moved when a test needs a gate miss. */
+private const val PAST_TTL_OFFSET_MILLIS = 4_000_000L
 
 /**
  * Tests the cold-start priming behaviour: the last-known-flags snapshot must populate
@@ -53,13 +57,13 @@ class LastKnownFlagsTests {
     private fun flagsmith(
         identity: String? = "person",
         defaultFlags: List<Flag> = emptyList(),
-        acceptStaleCache: Boolean = true
-    ) = Flagsmith(
-        environmentKey = "",
-        identity = identity,
+        acceptStaleCache: Boolean = true,
+        nowMillis: () -> Long = ::getTimeMillis
+    ) = testFlagsmith(
         baseUrl = "http://localhost:${mockServer.localPort}",
-        enableAnalytics = false,
+        identity = identity,
         defaultFlags = defaultFlags,
+        nowMillis = nowMillis,
         cacheConfig = FlagsmithCacheConfig(
             enableCache = true,
             cacheDirectoryPath = LAST_KNOWN_CACHE_DIR,
@@ -82,16 +86,16 @@ class LastKnownFlagsTests {
     @Test
     fun testFlagUpdateFlowIsPopulatedBeforeDelayedResponseArrives() {
         populateSnapshot()
-        // Remove the Ktor HTTP cache so the request genuinely reaches the delayed mock and can
-        // only succeed after the client's 4s timeout - the synchronous value below can then only
-        // come from the last-known-flags snapshot.
+        // Remove the Ktor HTTP cache AND run the fresh instance on a clock past the TTL, so its
+        // request genuinely reaches the delayed mock: it can only succeed after the client's 4s
+        // timeout, and the synchronous value below can only come from the snapshot.
         File("$LAST_KNOWN_CACHE_DIR/flagsmith").deleteRecursively()
 
         // The next response is delayed well beyond the client's 4s timeout, so it can never have
         // arrived by the time we do the synchronous assertion below.
         mockServer.mockDelayFor(MockEndpoint.GET_IDENTITIES)
 
-        val freshInstance = flagsmith()
+        val freshInstance = flagsmith(nowMillis = { getTimeMillis() + PAST_TTL_OFFSET_MILLIS })
         val finished = AtomicBoolean(false)
         freshInstance.getFeatureFlags { finished.set(true) }
 
@@ -102,7 +106,7 @@ class LastKnownFlagsTests {
     }
 
     @Test
-    fun testFlagUpdateFlowKeepsSnapshotWhenOffline() {
+    fun testStaleServeKeepsSnapshotWhenOffline() {
         populateSnapshot()
         // Remove ONLY the Ktor HTTP cache directory, leaving the last-known-flags snapshot (its
         // sibling) intact - otherwise the still-valid HTTP cache would serve the request and the
@@ -110,18 +114,49 @@ class LastKnownFlagsTests {
         File("$LAST_KNOWN_CACHE_DIR/flagsmith").deleteRecursively()
         mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
 
-        val offlineInstance = flagsmith(defaultFlags = defaultFlags)
+        // Clock past the TTL so the gate misses and the fetch is genuinely attempted; with
+        // acceptStaleCache = true the failing fetch must return the snapshot as a success.
+        val offlineInstance = flagsmith(
+            defaultFlags = defaultFlags,
+            nowMillis = { getTimeMillis() + PAST_TTL_OFFSET_MILLIS }
+        )
 
         // Primed synchronously from the snapshot before any call is made.
         assertEquals(756.0, offlineInstance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
 
-        // The fetch fails; the Result falls back to defaults, but the flow must keep the
-        // last-known snapshot - defaults must never overwrite it.
+        val result = runBlocking { offlineInstance.getFeatureFlagsSync() }
+        assertTrue(result.isSuccess)
+        assertEquals(
+            "Stale-serve must return the last-known flags, not the defaults fallback",
+            756.0,
+            result.getOrThrow().withValueFlag()?.featureStateValue
+        )
+
+        assertEquals(756.0, offlineInstance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
+    }
+
+    @Test
+    fun testOfflineWithoutStaleAcceptFallsBackToDefaults() {
+        populateSnapshot()
+        File("$LAST_KNOWN_CACHE_DIR/flagsmith").deleteRecursively()
+        mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
+
+        // With acceptStaleCache = false the expired snapshot is rejected at prime time, so the
+        // flow starts at defaultFlags and the failing fetch degrades to defaultFlags.
+        val offlineInstance = flagsmith(
+            defaultFlags = defaultFlags,
+            acceptStaleCache = false,
+            nowMillis = { getTimeMillis() + PAST_TTL_OFFSET_MILLIS }
+        )
+
+        assertNull(offlineInstance.flagUpdateFlow.value.withValueFlag())
+        assertEquals("default-flag", offlineInstance.flagUpdateFlow.value.first().feature.name)
+
         val result = runBlocking { offlineInstance.getFeatureFlagsSync() }
         assertTrue(result.isSuccess)
         assertEquals("default", result.getOrThrow().first().featureStateValue)
 
-        assertEquals(756.0, offlineInstance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
+        assertNull("Defaults must never overwrite anything in the flow", offlineInstance.flagUpdateFlow.value.withValueFlag())
     }
 
     @Test
@@ -178,11 +213,17 @@ class LastKnownFlagsTests {
     fun testDefaultsFallbackDoesNotOverwriteSnapshotOnDisk() {
         populateSnapshot()
         // Remove the Ktor HTTP cache so the next fetch genuinely fails (see
-        // testFlagUpdateFlowKeepsSnapshotWhenOffline) and the defaults fallback is exercised.
+        // testStaleServeKeepsSnapshotWhenOffline) and the defaults fallback is exercised: the
+        // failing instance runs past TTL with acceptStaleCache = false so stale-serve cannot
+        // short-circuit the path this test exists to cover.
         File("$LAST_KNOWN_CACHE_DIR/flagsmith").deleteRecursively()
         mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
 
-        val failingInstance = flagsmith(defaultFlags = defaultFlags)
+        val failingInstance = flagsmith(
+            defaultFlags = defaultFlags,
+            acceptStaleCache = false,
+            nowMillis = { getTimeMillis() + PAST_TTL_OFFSET_MILLIS }
+        )
         val result = runBlocking { failingInstance.getFeatureFlagsSync() }
         assertTrue(result.isSuccess)
 

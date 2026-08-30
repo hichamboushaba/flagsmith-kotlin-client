@@ -60,6 +60,8 @@ internal class LastKnownFlagsStore(
     private val ioMutex = Mutex()
     private var lastWrittenSeq = 0L // guarded by ioMutex
 
+    internal data class Snapshot(val flags: List<Flag>, val savedAtEpochSeconds: Long)
+
     /**
      * Reads the last-known flags if a valid, in-policy snapshot exists.
      *
@@ -68,7 +70,7 @@ internal class LastKnownFlagsStore(
      * atomically. Any failure (missing file, oversized file, parse error, unknown format version,
      * scope mismatch, expired snapshot) returns `null` and never throws.
      */
-    fun readIfValid(): List<Flag>? = runCatching {
+    fun readIfValid(): Snapshot? = runCatching {
         if (!fileSystem.exists(file)) return null
         if ((fileSystem.metadata(file).size ?: 0L) > MAX_FILE_BYTES) return null
 
@@ -80,7 +82,7 @@ internal class LastKnownFlagsStore(
         val ageSeconds = ((nowMillis() / 1000) - snapshot.savedAtEpochSeconds).coerceAtLeast(0)
         if (!acceptStale && ageSeconds > ttlSeconds) return null
 
-        snapshot.flags
+        Snapshot(snapshot.flags, snapshot.savedAtEpochSeconds)
     }.getOrNull()
 
     /**
