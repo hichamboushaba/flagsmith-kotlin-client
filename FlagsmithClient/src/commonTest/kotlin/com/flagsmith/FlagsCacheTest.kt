@@ -4,6 +4,8 @@ import com.flagsmith.entities.Feature
 import com.flagsmith.entities.Flag
 import com.flagsmith.internal.FlagsCache
 import kotlinx.coroutines.test.runTest
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import okio.Path.Companion.toPath
 import okio.buffer
 import okio.fakefilesystem.FakeFileSystem
@@ -29,14 +31,14 @@ class FlagsCacheTest {
 
     private fun store(
         fileSystem: FakeFileSystem,
-        ttlSeconds: Long = 3600,
+        ttl: Duration = 3600.seconds,
         acceptStale: Boolean = false,
         scope: FlagsCache.Scope = this.scope,
         nowMillis: () -> Long = { now }
     ) = FlagsCache(
         baseDirectory = baseDir,
         scope = scope,
-        ttlSeconds = ttlSeconds,
+        ttl = ttl,
         acceptStale = acceptStale,
         fileSystem = fileSystem,
         nowMillis = nowMillis
@@ -109,33 +111,33 @@ class FlagsCacheTest {
     fun expiredSnapshotReturnsNullUnlessStaleAccepted() = runTest {
         val fs = FakeFileSystem()
         val writtenAt = now
-        store(fs, ttlSeconds = 3600).write(sampleFlags, seq = 1)
+        store(fs, ttl = 3600.seconds).write(sampleFlags, seq = 1)
 
         // Read 4000s later with a strict TTL: expired.
-        val strictStore = store(fs, ttlSeconds = 3600, acceptStale = false) { writtenAt + 4_000_000 }
+        val strictStore = store(fs, ttl = 3600.seconds, acceptStale = false) { writtenAt + 4_000_000 }
         assertNull(strictStore.readIfValid())
 
         // Same instant with stale acceptance: served.
-        val staleStore = store(fs, ttlSeconds = 3600, acceptStale = true) { writtenAt + 4_000_000 }
+        val staleStore = store(fs, ttl = 3600.seconds, acceptStale = true) { writtenAt + 4_000_000 }
         assertEquals(sampleFlags, staleStore.readIfValid()?.flags)
     }
 
     @Test
     fun freshSnapshotWithinTtlIsServed() = runTest {
         val fs = FakeFileSystem()
-        store(fs, ttlSeconds = 3600).write(sampleFlags, seq = 1)
+        store(fs, ttl = 3600.seconds).write(sampleFlags, seq = 1)
 
-        val laterStore = store(fs, ttlSeconds = 3600) { now + 3_600_000 }
+        val laterStore = store(fs, ttl = 3600.seconds) { now + 3_600_000 }
         assertEquals(sampleFlags, laterStore.readIfValid()?.flags)
     }
 
     @Test
     fun backwardsClockJumpTreatedAsAgeZero() = runTest {
         val fs = FakeFileSystem()
-        store(fs, ttlSeconds = 3600).write(sampleFlags, seq = 1)
+        store(fs, ttl = 3600.seconds).write(sampleFlags, seq = 1)
 
         // "Now" before the write instant: age must clamp to 0 and stay eligible.
-        val storeAfterClockJump = store(fs, ttlSeconds = 3600) { now - 10_000_000 }
+        val storeAfterClockJump = store(fs, ttl = 3600.seconds) { now - 10_000_000 }
         assertEquals(sampleFlags, storeAfterClockJump.readIfValid()?.flags)
     }
 

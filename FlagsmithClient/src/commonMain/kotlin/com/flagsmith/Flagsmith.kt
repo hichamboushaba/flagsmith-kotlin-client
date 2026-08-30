@@ -89,8 +89,9 @@ class Flagsmith internal constructor(
             FlagsCache(
                 baseDirectory = cacheConfig.cacheDirectoryPath.toPath(),
                 scope = FlagsCache.Scope(baseUrl, environmentKey, identity),
-                ttlSeconds = cacheConfig.cacheTTLSeconds,
+                ttl = cacheConfig.cacheTTL,
                 acceptStale = cacheConfig.acceptStaleCache,
+                maxFileBytes = cacheConfig.maxSnapshotSizeBytes,
                 nowMillis = nowMillis,
             )
         } else null
@@ -194,7 +195,7 @@ class Flagsmith internal constructor(
         transient: Boolean = false,
         forceRefresh: Boolean = false
     ): Result<List<Flag>> {
-        // In-memory TTL gate: within [FlagsmithCacheConfig.cacheTTLSeconds] of the last successful
+        // In-memory TTL gate: within [FlagsmithCacheConfig.cacheTTL] of the last successful
         // fetch, answer from [flagsState] without touching Ktor at all. The exclusions are
         // load-bearing: `traits != null` is a POST (a write), `transient = true` is a distinct
         // server-side semantic that must never be served from persisted state, and
@@ -203,8 +204,11 @@ class Flagsmith internal constructor(
             stateMutex.withLock {
                 val fetchedAt = fetchedAtMillisLocked()
                 val age = nowMillis() - fetchedAt
-                val ttlMillis = cacheConfig.cacheTTLSeconds.coerceAtMost(Long.MAX_VALUE / 1000) * 1000
-                if (fetchedAt > 0L && age in 0..ttlMillis) flagsState.value else null
+                if (fetchedAt > 0L && age in 0..cacheConfig.cacheTTL.inWholeMilliseconds) {
+                    flagsState.value
+                } else {
+                    null
+                }
             }?.let { return Result.success(it) }
         }
 

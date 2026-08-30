@@ -7,6 +7,7 @@ import com.flagsmith.mockResponses.mockDelayFor
 import com.flagsmith.mockResponses.mockFailureFor
 import com.flagsmith.mockResponses.mockResponseFor
 import io.ktor.util.date.getTimeMillis
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.runBlocking
 import org.awaitility.Awaitility
 import org.awaitility.kotlin.await
@@ -67,7 +68,7 @@ class FlagsCachePrimingTests {
         cacheConfig = FlagsmithCacheConfig(
             enableCache = true,
             cacheDirectoryPath = FLAGS_CACHE_DIR,
-            cacheTTLSeconds = 3600,
+            cacheTTL = 3600.seconds,
             acceptStaleCache = acceptStaleCache
         )
     )

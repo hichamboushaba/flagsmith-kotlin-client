@@ -14,12 +14,13 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import okio.*
 import okio.ByteString.Companion.encodeUtf8
+import kotlin.time.Duration
 
 private const val DIR_NAME = "flagsmith-flags-cache"
 private const val LEGACY_HTTP_CACHE_DIR = "flagsmith"
+private const val DEFAULT_MAX_FILES = 4
+private const val DEFAULT_MAX_FILE_BYTES = 1L shl 20 // 1 MB
 private const val FORMAT_VERSION = 1
-private const val MAX_FILE_BYTES = 1L shl 20 // 1 MB
-private const val MAX_FILES = 4
 
 /**
  * Persists the flags most recently emitted to [com.flagsmith.Flagsmith.flagUpdateFlow] so they can
@@ -34,8 +35,10 @@ private const val MAX_FILES = 4
 internal class FlagsCache(
     baseDirectory: Path,
     scope: Scope,
-    private val ttlSeconds: Long,
+    private val ttl: Duration,
     private val acceptStale: Boolean,
+    private val maxFileBytes: Long = DEFAULT_MAX_FILE_BYTES,
+    private val maxFiles: Int = DEFAULT_MAX_FILES,
     private val json: kotlinx.serialization.json.Json = defaultJson,
     private val fileSystem: FileSystem = FileSystem.SYSTEM,
     private val nowMillis: () -> Long = ::getTimeMillis,
@@ -75,7 +78,7 @@ internal class FlagsCache(
      */
     fun readIfValid(): Snapshot? = runCatching {
         if (!fileSystem.exists(file)) return null
-        if ((fileSystem.metadata(file).size ?: 0L) > MAX_FILE_BYTES) return null
+        if ((fileSystem.metadata(file).size ?: 0L) > maxFileBytes) return null
 
         val snapshot = json.decodeFromString<CachedFlags>(
             fileSystem.source(file).buffer().use { it.readUtf8() }
@@ -83,7 +86,7 @@ internal class FlagsCache(
         if (snapshot.version != FORMAT_VERSION || snapshot.scopeHash != scopeHash) return null
 
         val ageSeconds = ((nowMillis() / 1000) - snapshot.savedAtEpochSeconds).coerceAtLeast(0)
-        if (!acceptStale && ageSeconds > ttlSeconds) return null
+        if (!acceptStale && ageSeconds > ttl.inWholeSeconds) return null
 
         Snapshot(snapshot.flags, snapshot.savedAtEpochSeconds)
     }.getOrNull()
@@ -93,28 +96,32 @@ internal class FlagsCache(
      * (older than the newest one already handled) are dropped. Never throws.
      */
     suspend fun write(flags: List<Flag>, seq: Long): Unit = withContext(Dispatchers.IO) {
-        ioMutex.withLock {
-            cleanLegacyHttpCacheLocked()
-            if (seq <= lastWrittenSeq) return@withLock
-            lastWrittenSeq = seq
-            runCatching {
-                fileSystem.createDirectories(directory, mustCreate = false)
-                val tmp = directory / "$scopeHash.json.tmp"
-                fileSystem.sink(tmp).buffer().use { output ->
-                    output.writeUtf8(
-                        json.encodeToString(
-                            CachedFlags(
-                                scopeHash = scopeHash,
-                                savedAtEpochSeconds = nowMillis() / 1000,
-                                flags = flags
+        val cleanLegacy = ioMutex.withLock {
+            val cleanLegacy = !legacyHttpCacheCleaned
+            legacyHttpCacheCleaned = true
+            if (seq > lastWrittenSeq) {
+                lastWrittenSeq = seq
+                runCatching {
+                    fileSystem.createDirectories(directory, mustCreate = false)
+                    val tmp = directory / "$scopeHash.json.tmp"
+                    fileSystem.sink(tmp).buffer().use { output ->
+                        output.writeUtf8(
+                            json.encodeToString(
+                                CachedFlags(
+                                    scopeHash = scopeHash,
+                                    savedAtEpochSeconds = nowMillis() / 1000,
+                                    flags = flags
+                                )
                             )
                         )
-                    )
+                    }
+                    moveAtomicallyOrFallback(tmp, file)
+                    pruneToNewest(maxFiles)
                 }
-                moveAtomicallyOrFallback(tmp, file)
-                pruneToNewest(MAX_FILES)
             }
+            cleanLegacy
         }
+        if (cleanLegacy) cleanLegacyHttpCache()
     }
 
     /**
@@ -131,11 +138,10 @@ internal class FlagsCache(
 
     /**
      * 0.1.x installations carried a Ktor HTTP cache under `<cacheDirectoryPath>/flagsmith`;
-     * nothing reads it anymore, so reclaim it once on the first write. Best-effort.
+     * nothing reads it anymore, so reclaim it once on the first write. Best-effort, deliberately
+     * executed outside [ioMutex] so the lock is never held across this IO.
      */
-    private fun cleanLegacyHttpCacheLocked() {
-        if (legacyHttpCacheCleaned) return
-        legacyHttpCacheCleaned = true
+    private fun cleanLegacyHttpCache() {
         runCatching { fileSystem.deleteRecursively(baseDirectory / LEGACY_HTTP_CACHE_DIR, mustExist = false) }
     }
 

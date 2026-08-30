@@ -32,7 +32,7 @@ flagsmith.getFeatureFlags { result -> /* ... */ }
 ## Flags cache (offline cold start + TTL gate)
 
 With `enableCache = true`, the library caches the most recently fetched flags in memory **and** in a
-small snapshot file next to the cache directory, gated by `cacheTTLSeconds`:
+small snapshot file next to the cache directory, gated by `cacheTTL` (a `kotlin.time.Duration`):
 
 - **Within the TTL, `getFeatureFlags()` is answered from memory and issues no HTTP request at all.**
   This survives process death: the snapshot seeds both `flagUpdateFlow` and the TTL clock, so an app
@@ -43,7 +43,7 @@ small snapshot file next to the cache directory, gated by `cacheTTLSeconds`:
   empty list, not as defaults. With `acceptStaleCache = false` (default), the failure falls back to
   `defaultFlags` as before.
 - `clearCache()` resets the flow to `defaultFlags`, clears the TTL clock and deletes the snapshot.
-- **`cacheSize` was removed** in 0.2.0 — the flags cache is bounded internally.
+- **`cacheTTLSeconds: Long` became `cacheTTL: Duration`, and `cacheSize` became `maxSnapshotSizeBytes`** (maximum size in bytes of a single cached snapshot; larger snapshots are skipped).
 - **`getTrait()`, `getTraits()` and `getIdentity()` are never cached** and always hit the network —
   they are cold-path reads; call them sparingly (see the migration note above).
 

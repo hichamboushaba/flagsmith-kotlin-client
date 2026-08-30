@@ -8,6 +8,7 @@ import com.flagsmith.mockResponses.MockResponses
 import com.flagsmith.mockResponses.mockFailureFor
 import com.flagsmith.mockResponses.mockResponseFor
 import io.ktor.util.date.getTimeMillis
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -27,7 +28,7 @@ private const val GATE_CACHE_DIR = "cache-ttl-gate"
 private const val PAST_TTL_OFFSET_MILLIS = 4_000_000L
 
 /**
- * Tests the in-memory TTL gate: within [FlagsmithCacheConfig.cacheTTLSeconds] of the last
+ * Tests the in-memory TTL gate: within [FlagsmithCacheConfig.cacheTTL] of the last
  * successful fetch, `getFeatureFlags` must answer from memory without issuing an HTTP request.
  * Request counts are pinned with MockServer's VerificationTimes.exactly.
  *
@@ -58,7 +59,7 @@ class FlagsTtlGateTests {
     private fun gateCacheConfig(acceptStaleCache: Boolean = true) = FlagsmithCacheConfig(
         enableCache = true,
         cacheDirectoryPath = GATE_CACHE_DIR,
-        cacheTTLSeconds = 3600,
+        cacheTTL = 3600.seconds,
         acceptStaleCache = acceptStaleCache
     )
 
