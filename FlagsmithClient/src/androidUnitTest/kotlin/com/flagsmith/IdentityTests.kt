@@ -14,17 +14,10 @@ import org.mockserver.model.HttpRequest.request
 class IdentityTests {
 
     private lateinit var mockServer: ClientAndServer
-    private lateinit var flagsmith: Flagsmith
 
     @Before
     fun setup() {
         mockServer = ClientAndServer.startClientAndServer()
-        flagsmith = Flagsmith(
-            environmentKey = "",
-            baseUrl = "http://localhost:${mockServer.localPort}",
-            enableAnalytics = false,
-            cacheConfig = FlagsmithCacheConfig(enableCache = false)
-        )
     }
 
     @After
@@ -32,11 +25,19 @@ class IdentityTests {
         mockServer.stop()
     }
 
+    private fun flagsmith(identity: String? = null) = Flagsmith(
+        environmentKey = "",
+        identity = identity,
+        baseUrl = "http://localhost:${mockServer.localPort}",
+        enableAnalytics = false,
+        cacheConfig = FlagsmithCacheConfig(enableCache = false)
+    )
+
     @Test
     fun testGetIdentity() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
         runBlocking {
-            val result = flagsmith.getIdentitySync("person")
+            val result = flagsmith("person").getIdentitySync()
 
             mockServer.verify(
                 request()
@@ -59,7 +60,7 @@ class IdentityTests {
     fun testGetTransientIdentity() {
         mockServer.mockResponseFor(MockEndpoint.GET_TRANSIENT_IDENTITIES)
         runBlocking {
-            val result = flagsmith.getIdentitySync("transient-identity", true)
+            val result = flagsmith("transient-identity").getIdentitySync(transient = true)
 
             mockServer.verify(
                 request()

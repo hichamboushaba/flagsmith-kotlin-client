@@ -22,6 +22,7 @@ class TraitEntityTests {
         mockServer = ClientAndServer.startClientAndServer()
         flagsmith = Flagsmith(
             environmentKey = "",
+            identity = "person",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,
             cacheConfig = FlagsmithCacheConfig(enableCache = false)
@@ -37,7 +38,7 @@ class TraitEntityTests {
     fun testTraitValueStringType() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES_TRAIT_STRING)
         runBlocking {
-            val result = flagsmith.getTraitSync("client-key", "person")
+            val result = flagsmith.getTraitSync("client-key")
             Assert.assertTrue(result.isSuccess)
             Assert.assertEquals("12345", result.getOrThrow()?.stringValue)
         }
@@ -47,7 +48,7 @@ class TraitEntityTests {
     fun testTraitValueIntType() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES_TRAIT_INTEGER)
         runBlocking {
-            val result = flagsmith.getTraitSync("client-key", "person")
+            val result = flagsmith.getTraitSync("client-key")
             Assert.assertTrue(result.isSuccess)
             Assert.assertEquals(5, result.getOrThrow()?.intValue)
             Assert.assertTrue("Integers in the JSON actually get decoded as Double",
@@ -59,7 +60,7 @@ class TraitEntityTests {
     fun testTraitValueDoubleType() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES_TRAIT_DOUBLE)
         runBlocking {
-            val result = flagsmith.getTraitSync("client-key", "person")
+            val result = flagsmith.getTraitSync("client-key")
             Assert.assertTrue(result.isSuccess)
             Assert.assertEquals(0.5, result.getOrThrow()?.doubleValue)
         }
@@ -69,7 +70,7 @@ class TraitEntityTests {
     fun testTraitValueBooleanType() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES_TRAIT_BOOLEAN)
         runBlocking {
-            val result = flagsmith.getTraitSync("client-key", "person")
+            val result = flagsmith.getTraitSync("client-key")
             Assert.assertTrue(result.isSuccess)
             Assert.assertEquals(true, result.getOrThrow()?.booleanValue)
         }

@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 
 internal actual fun Flagsmith.Companion.create(
     environmentKey: String,
+    identity: String?,
     baseUrl: String,
     eventSourceBaseUrl: String,
     userAgentOverride: String?,
@@ -23,6 +24,7 @@ internal actual fun Flagsmith.Companion.create(
     coroutineScope: CoroutineScope
 ): Flagsmith = Flagsmith(
     environmentKey = environmentKey,
+    identity = identity,
     baseUrl = baseUrl,
     eventSourceBaseUrl = eventSourceBaseUrl,
     userAgentOverride = userAgentOverride,

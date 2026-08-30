@@ -9,6 +9,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4.2.2
+        with:
+          # The published version is derived from the latest git tag; fetch the full history
+          # so `git describe` sees it (a workflow_dispatch run without tags would publish 0.1.0).
+          fetch-depth: 0
 
       - name: Gradle
         uses: ./.github/actions/prepare-gradle

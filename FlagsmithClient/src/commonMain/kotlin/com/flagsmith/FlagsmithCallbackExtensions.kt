@@ -9,54 +9,60 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 fun Flagsmith.getFeatureFlags(
-    identity: String? = null,
     traits: List<Trait>? = null,
     transient: Boolean = false,
     forceRefresh: Boolean = false,
     result: (Result<List<Flag>>) -> Unit
 ) {
     CoroutineScope(Dispatchers.Unconfined).launch {
-        result(getFeatureFlags(identity, traits, transient, forceRefresh))
+        result(getFeatureFlags(traits, transient, forceRefresh))
     }
 }
 
-fun Flagsmith.getTrait(id: String, identity: String, result: (Result<Trait?>) -> Unit) {
+fun Flagsmith.hasFeatureFlag(
+    featureId: String,
+    result: (Result<Boolean>) -> Unit
+) {
     CoroutineScope(Dispatchers.Unconfined).launch {
-        result(getTrait(id, identity))
+        result(hasFeatureFlag(featureId))
     }
 }
 
 fun Flagsmith.getValueForFeature(
     featureId: String,
-    identity: String? = null,
     result: (Result<Any?>) -> Unit
 ) {
     CoroutineScope(Dispatchers.Unconfined).launch {
-        result(getValueForFeature(featureId, identity))
+        result(getValueForFeature(featureId))
     }
 }
 
-fun Flagsmith.getTraits(identity: String, result: (Result<List<Trait>>) -> Unit) {
+fun Flagsmith.getTraits(result: (Result<List<Trait>>) -> Unit) {
     CoroutineScope(Dispatchers.Unconfined).launch {
-        result(getTraits(identity))
+        result(getTraits())
     }
 }
 
-fun Flagsmith.setTraits(traits: List<Trait>, identity: String, result: (Result<List<TraitWithIdentity>>) -> Unit) {
+fun Flagsmith.getTrait(id: String, result: (Result<Trait?>) -> Unit) {
     CoroutineScope(Dispatchers.Unconfined).launch {
-        result(setTraits(traits, identity))
+        result(getTrait(id))
     }
 }
 
-
-fun Flagsmith.setTrait(trait: Trait, identity: String, result: (Result<TraitWithIdentity>) -> Unit) {
+fun Flagsmith.setTraits(traits: List<Trait>, result: (Result<List<TraitWithIdentity>>) -> Unit) {
     CoroutineScope(Dispatchers.Unconfined).launch {
-        result(setTrait(trait, identity))
+        result(setTraits(traits))
     }
 }
 
-fun Flagsmith.getIdentity(identity: String, transient: Boolean = false, result: (Result<IdentityFlagsAndTraits>) -> Unit) {
+fun Flagsmith.setTrait(trait: Trait, result: (Result<TraitWithIdentity>) -> Unit) {
     CoroutineScope(Dispatchers.Unconfined).launch {
-        result(getIdentity(identity, transient))
+        result(setTrait(trait))
+    }
+}
+
+fun Flagsmith.getIdentity(transient: Boolean = false, result: (Result<IdentityFlagsAndTraits>) -> Unit) {
+    CoroutineScope(Dispatchers.Unconfined).launch {
+        result(getIdentity(transient))
     }
 }

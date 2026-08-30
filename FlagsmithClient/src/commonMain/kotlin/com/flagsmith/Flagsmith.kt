@@ -4,13 +4,18 @@ import com.flagsmith.entities.*
 import com.flagsmith.internal.FlagsmithAnalytics
 import com.flagsmith.internal.FlagsmithEventService
 import com.flagsmith.internal.FlagsmithEventTimeTracker
+import com.flagsmith.internal.LastKnownFlagsStore
 import com.flagsmith.internal.http.ClearableHttpCache
 import com.flagsmith.internal.http.FlagsmithApi
 import com.flagsmith.internal.http.FlagsmithEventApi
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import okio.Path.Companion.toPath
 
 /**
  * Flagsmith
@@ -18,6 +23,11 @@ import kotlinx.coroutines.flow.onEach
  * The main interface to all of the Flagsmith functionality
  *
  * @property environmentKey Take this API key from the Flagsmith dashboard and pass here
+ * @property identity The identity to fetch flags and traits for. When provided, every
+ * identity-scoped method targets this identity and [flagUpdateFlow] represents its flags. Passing
+ * a different identity later means constructing a new instance (and [close]-ing the old one).
+ * When `null`, the instance works in environment mode (environment-level flags only) and the
+ * identity-scoped methods throw [IllegalStateException].
  * @property baseUrl By default we'll connect to the Flagsmith backend, but if you self-host you can configure here
  * @property enableAnalytics Enable analytics - default true
  * @property analyticsFlushPeriod The period in seconds between attempts by the Flagsmith SDK to push analytic events to the server
@@ -25,6 +35,7 @@ import kotlinx.coroutines.flow.onEach
  */
 class Flagsmith internal constructor(
     private val environmentKey: String,
+    private val identity: String? = null,
     private val baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
     private val eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
     private val enableAnalytics: Boolean = DEFAULT_ENABLE_ANALYTICS,
@@ -58,20 +69,75 @@ class Flagsmith internal constructor(
     private val cache: ClearableHttpCache?
     private val analytics: FlagsmithAnalytics?
 
-    private var lastUsedIdentity: String? = null
-
     // The last time we got an event from the SSE stream or via the API
     private var lastEventUpdate: Double = 0.0
 
-    /** Stream of flag updates from the SSE stream if enabled */
-    val flagUpdateFlow = MutableStateFlow<List<Flag>>(listOf())
+    /**
+     * Stores the flags most recently emitted to [flagUpdateFlow] so they can survive a cold start.
+     * `null` when caching is disabled.
+     */
+    init {
+        // Declared before the store property so the guard runs before `cacheDirectoryPath` is
+        // consumed by its initialiser.
+        require(!cacheConfig.enableCache || cacheConfig.cacheDirectoryPath.isNotEmpty()) {
+            "Cache directory path must be provided when cache is enabled"
+        }
+    }
+
+    private val lastKnownFlagsStore: LastKnownFlagsStore? =
+        if (cacheConfig.enableCache) {
+            LastKnownFlagsStore(
+                baseDirectory = cacheConfig.cacheDirectoryPath.toPath(),
+                scope = LastKnownFlagsStore.Scope(baseUrl, environmentKey, identity),
+                ttlSeconds = cacheConfig.cacheTTLSeconds,
+                acceptStale = cacheConfig.acceptStaleCache,
+            )
+        } else null
+
+    /**
+     * Backing state of [flagUpdateFlow]. Primed lazily on first access: either from the
+     * last-known-flags snapshot or, when there is none, from [defaultFlags]. `by lazy` guarantees
+     * the priming read happens exactly once, happens-before any observer, and before any write
+     * that goes through [flagsState].
+     */
+    private val flagsState: MutableStateFlow<List<Flag>> by lazy {
+        MutableStateFlow(lastKnownFlagsStore?.readIfValid() ?: defaultFlags)
+    }
+
+    /** The most recently known flags: primed from disk on first access, then updated by every successful fetch. */
+    val flagUpdateFlow: StateFlow<List<Flag>> get() = flagsState
+
+    // Guards [seqCounter], [lastAppliedSeq] and the [flagsState] write. Never held across IO.
+    private val stateMutex = Mutex()
+    private var seqCounter = 0L // guarded by stateMutex
+    private var lastAppliedSeq = 0L // guarded by stateMutex
+
+    /** Allocates the ordering token for a flag-producing operation. Called at operation entry. */
+    private suspend fun beginOperation(): Long = stateMutex.withLock { ++seqCounter }
+
+    /**
+     * Applies [flags] to [flagsState] unless a newer operation has already applied (or
+     * [clearCache] has invalidated everything up to the current sequence). On success and when
+     * [persist] is set, the flags are also written to the last-known-flags store.
+     */
+    private suspend fun applyFlags(flags: List<Flag>, seq: Long, persist: Boolean) {
+        val accepted = stateMutex.withLock {
+            if (seq <= lastAppliedSeq) {
+                false
+            } else {
+                lastAppliedSeq = seq
+                flagsState.value = flags
+                true
+            }
+        }
+        if (accepted && persist) {
+            lastKnownFlagsStore?.write(flags, seq)
+        }
+    }
 
     init {
         if (enableRealtimeUpdates && flagsmithEventApiFactory == null) {
             error("Real-time updates are enabled but no event API factory was provided")
-        }
-        require(!cacheConfig.enableCache || cacheConfig.cacheDirectoryPath.isNotEmpty()) {
-            "Cache directory path must be provided when cache is enabled"
         }
 
         flagsmithApiFactory.create(
@@ -102,15 +168,13 @@ class Flagsmith internal constructor(
     }
 
     suspend fun getFeatureFlags(
-        identity: String? = null,
         traits: List<Trait>? = null,
         transient: Boolean = false,
         forceRefresh: Boolean = false
     ): Result<List<Flag>> {
-        // Save the last used identity as we'll refresh with this if we get update events
-        lastUsedIdentity = identity
+        val seq = beginOperation()
 
-        return if (identity != null) {
+        val result = if (identity != null) {
             if (traits != null) {
                 flagSmithApi.postTraits(IdentityAndTraits(identity, traits, transient))
                     .map { it.flags }
@@ -122,88 +186,93 @@ class Flagsmith internal constructor(
             }
         } else {
             if (traits != null) {
-                throw IllegalArgumentException("Cannot set traits without an identity");
+                // Only reachable in environment mode - see [requireIdentity].
+                error(IDENTITY_REQUIRED_MESSAGE)
             } else {
                 flagSmithApi.getFlags(forceRefresh = forceRefresh)
             }
         }
-            .recoverCatching { defaultFlags.ifEmpty { throw it } }
-            .onSuccess { flags ->
-                flagUpdateFlow.value = flags
-            }
+
+        // Emit and persist BEFORE falling back to defaults: a defaults fallback must never
+        // overwrite the last-known flags in the flow, nor reach the disk snapshot.
+        if (result.isSuccess) {
+            applyFlags(result.getOrThrow(), seq, persist = !transient)
+        }
+
+        return result.recoverCatching { defaultFlags.ifEmpty { throw it } }
     }
 
     suspend fun hasFeatureFlag(
-        featureId: String,
-        identity: String? = null
+        featureId: String
     ): Result<Boolean> {
-        return getFeatureFlag(featureId, identity).map { flag -> flag != null }
-    }
-
-    fun hasFeatureFlag(
-        featureId: String,
-        identity: String? = null,
-        result: (Result<Boolean>) -> Unit
-    ) {
-        CoroutineScope(Dispatchers.Unconfined).launch {
-            result(hasFeatureFlag(featureId, identity))
-        }
+        return getFeatureFlag(featureId).map { flag -> flag != null }
     }
 
     suspend fun getValueForFeature(
-        featureId: String,
-        identity: String? = null
-    ) = getFeatureFlag(featureId, identity).map { flag -> flag?.featureStateValue }
+        featureId: String
+    ) = getFeatureFlag(featureId).map { flag -> flag?.featureStateValue }
 
-    suspend fun getTrait(id: String, identity: String): Result<Trait?> {
-        return flagSmithApi.getIdentityFlagsAndTraits(identity)
+    suspend fun getTrait(id: String): Result<Trait?> {
+        return flagSmithApi.getIdentityFlagsAndTraits(requireIdentity())
             .map { value -> value.traits.find { it.key == id } }
-            .also { lastUsedIdentity = identity }
     }
 
-    suspend fun getTraits(identity: String): Result<List<Trait>> {
-        return flagSmithApi.getIdentityFlagsAndTraits(identity)
+    suspend fun getTraits(): Result<List<Trait>> {
+        return flagSmithApi.getIdentityFlagsAndTraits(requireIdentity())
             .map { value -> value.traits }
-            .also { lastUsedIdentity = identity }
     }
 
-    suspend fun setTrait(trait: Trait, identity: String): Result<TraitWithIdentity> {
-        return flagSmithApi.postTraits(IdentityAndTraits(identity, listOf(trait)))
-            .onSuccess {
-                flagUpdateFlow.value = it.flags
-            }
-            .map { response ->
+    suspend fun setTrait(trait: Trait): Result<TraitWithIdentity> {
+        val id = requireIdentity()
+        val seq = beginOperation()
+        val result = flagSmithApi.postTraits(IdentityAndTraits(id, listOf(trait)))
+        if (result.isSuccess) {
+            applyFlags(result.getOrThrow().flags, seq, persist = true)
+        }
+        return result.map { response ->
+            TraitWithIdentity(
+                key = response.traits.first().key,
+                traitValue = response.traits.first().traitValue,
+                identity = Identity(id)
+            )
+        }
+    }
+
+    suspend fun setTraits(traits: List<Trait>): Result<List<TraitWithIdentity>> {
+        val id = requireIdentity()
+        val seq = beginOperation()
+        val result = flagSmithApi.postTraits(IdentityAndTraits(id, traits))
+        if (result.isSuccess) {
+            applyFlags(result.getOrThrow().flags, seq, persist = true)
+        }
+        return result.map { response ->
+            response.traits.map { trait ->
                 TraitWithIdentity(
-                    key = response.traits.first().key,
-                    traitValue = response.traits.first().traitValue,
-                    identity = Identity(identity)
+                    key = trait.key,
+                    traitValue = trait.traitValue,
+                    identity = Identity(id)
                 )
             }
+        }
     }
 
-    suspend fun setTraits(traits: List<Trait>, identity: String): Result<List<TraitWithIdentity>> {
-        return flagSmithApi.postTraits(IdentityAndTraits(identity, traits))
-            .onSuccess { flagUpdateFlow.value = it.flags }
-            .map { response ->
-                response.traits.map { trait ->
-                    TraitWithIdentity(
-                        key = trait.key,
-                        traitValue = trait.traitValue,
-                        identity = Identity(identity)
-                    )
-                }
-            }
-    }
-
-    suspend fun getIdentity(identity: String, transient: Boolean = false): Result<IdentityFlagsAndTraits> =
-        flagSmithApi.getIdentityFlagsAndTraits(identity, transient)
-            .also { lastUsedIdentity = identity }
+    suspend fun getIdentity(transient: Boolean = false): Result<IdentityFlagsAndTraits> =
+        flagSmithApi.getIdentityFlagsAndTraits(requireIdentity(), transient)
 
     suspend fun clearCache() {
+        // Barrier: anything started before this call is superseded and can neither reach the flow
+        // nor the disk snapshot afterwards. flagUpdateFlow's current value is deliberately left
+        // as-is: clearCache clears persisted state, matching the pre-existing behaviour.
+        val barrier = stateMutex.withLock { lastAppliedSeq = seqCounter; seqCounter }
         try {
             cache?.invalidate()
         } catch (e: Exception) {
             println("Error clearing cache, ${e.stackTraceToString()}")
+        }
+        try {
+            lastKnownFlagsStore?.clear(barrier)
+        } catch (e: Exception) {
+            println("Error clearing last-known flags, ${e.stackTraceToString()}")
         }
     }
 
@@ -222,16 +291,18 @@ class Flagsmith internal constructor(
      */
     fun close() {
         sseUpdatesJob?.cancel()
+        analytics?.stop()
     }
+
+    private fun requireIdentity(): String = identity ?: error(IDENTITY_REQUIRED_MESSAGE)
 
     private suspend fun getFeatureFlag(
         featureId: String,
-        identity: String?,
-    ) = getFeatureFlags(identity).map { flags ->
+    ) = getFeatureFlags().map { flags ->
         val foundFlag = flags.find { flag -> flag.feature.name == featureId && flag.enabled }
         analytics?.trackEvent(featureId)
         foundFlag
-    }.also { lastUsedIdentity = identity }
+    }
 
     private fun FlagsmithEventService.subscribeToEvents() = sseEventsFlow
         .onEach { event ->
@@ -239,12 +310,14 @@ class Flagsmith internal constructor(
 
             // Check whether this event is anything new
             if (lastEventUpdate > lastFlagFetchTime) {
-                // First evict the cache otherwise we'll be stuck with the old values
+                // First evict the cache otherwise we'll be stuck with the old values.
+                // HTTP cache only - the last-known-flags snapshot survives on purpose, so an
+                // offline restart after an SSE refresh still primes.
                 cache?.invalidate()
                 lastFlagFetchTime = lastEventUpdate
 
                 // Now we can get the new values, which will automatically be emitted to the flagUpdateFlow
-                getFeatureFlags(lastUsedIdentity) { res ->
+                getFeatureFlags { res ->
                     if (res.isFailure) {
                         // TODO: provide a logging mechanism
                         println("Error getting flags in SSE stream: ${res.exceptionOrNull()}")
@@ -260,8 +333,13 @@ class Flagsmith internal constructor(
         const val DEFAULT_ENABLE_ANALYTICS = true
         const val DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS = 10
 
+        private const val IDENTITY_REQUIRED_MESSAGE =
+            "This Flagsmith instance was created without an identity. " +
+                "Pass `identity` to the Flagsmith factory to use identity-scoped APIs."
+
         operator fun invoke(
             environmentKey: String,
+            identity: String? = null,
             baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
             eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
             userAgentOverride: String? = null,
@@ -277,6 +355,7 @@ class Flagsmith internal constructor(
             sseUpdatesScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
         ) = create(
             environmentKey = environmentKey,
+            identity = identity,
             baseUrl = baseUrl,
             eventSourceBaseUrl = eventSourceBaseUrl,
             userAgentOverride = userAgentOverride,

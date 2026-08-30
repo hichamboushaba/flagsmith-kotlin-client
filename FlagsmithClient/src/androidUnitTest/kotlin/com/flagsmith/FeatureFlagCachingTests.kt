@@ -29,11 +29,13 @@ import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertTrue
 
-private const val CACHE_DIR = "cache"
+private const val CACHE_DIR_ENV = "cache-env"
+private const val CACHE_DIR_IDENTITY = "cache-identity"
 
 class FeatureFlagCachingTests {
     private lateinit var mockServer: ClientAndServer
     private lateinit var flagsmithWithCache: Flagsmith
+    private lateinit var flagsmithWithCacheIdentity: Flagsmith
     private lateinit var flagsmithNoCache: Flagsmith
 
     @Mock
@@ -84,7 +86,19 @@ class FeatureFlagCachingTests {
             defaultFlags = defaultFlags,
             cacheConfig = FlagsmithCacheConfig(
                 enableCache = true,
-                cacheDirectoryPath = CACHE_DIR
+                cacheDirectoryPath = CACHE_DIR_ENV
+            )
+        )
+
+        flagsmithWithCacheIdentity = Flagsmith(
+            environmentKey = "",
+            identity = "person",
+            baseUrl = "http://localhost:${mockServer.localPort}",
+            enableAnalytics = false,
+            defaultFlags = defaultFlags,
+            cacheConfig = FlagsmithCacheConfig(
+                enableCache = true,
+                cacheDirectoryPath = CACHE_DIR_IDENTITY
             )
         )
 
@@ -122,7 +136,10 @@ class FeatureFlagCachingTests {
     @After
     fun tearDown() {
         mockServer.stop()
-        File(CACHE_DIR).delete()
+        // Recursive delete: File.delete() silently no-ops on non-empty directories, which would
+        // leak snapshot/cache state between tests.
+        File(CACHE_DIR_ENV).deleteRecursively()
+        File(CACHE_DIR_IDENTITY).deleteRecursively()
         appContext = null
     }
 
@@ -133,7 +150,7 @@ class FeatureFlagCachingTests {
 
         // First time around we should be successful and cache the response
         var foundFromServer: Flag? = null
-        flagsmithWithCache.getFeatureFlags(identity = "person") { result ->
+        flagsmithWithCacheIdentity.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromServer =
@@ -146,7 +163,7 @@ class FeatureFlagCachingTests {
 
         // Now we mock the failure and expect the cached response to be returned
         var foundFromCache: Flag? = null
-        flagsmithWithCache.getFeatureFlags(identity = "person") { result ->
+        flagsmithWithCacheIdentity.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromCache =
@@ -165,7 +182,7 @@ class FeatureFlagCachingTests {
 
         // First time around we should be successful and cache the response
         var foundFromServer: Flag? = null
-        flagsmithWithCache.getFeatureFlags(identity = "person") { result ->
+        flagsmithWithCacheIdentity.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromServer =
@@ -178,7 +195,7 @@ class FeatureFlagCachingTests {
 
         // Now we mock the failure and expect the cached response to be returned
         var foundFromCache: Flag? = null
-        flagsmithWithCache.getFeatureFlags(identity = "person") { result ->
+        flagsmithWithCacheIdentity.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromCache =
@@ -197,7 +214,7 @@ class FeatureFlagCachingTests {
 
         // First time around we should be successful and cache the response
         var foundFromServer: Flag? = null
-        flagsmithWithCache.getFeatureFlags() { result ->
+        flagsmithWithCache.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromServer =
@@ -229,7 +246,7 @@ class FeatureFlagCachingTests {
 
         // First time around we should fail and fall back to the defaults
         var foundFromCache: Flag? = null
-        flagsmithWithCache.getFeatureFlags() { result ->
+        flagsmithWithCache.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromCache =
@@ -241,7 +258,7 @@ class FeatureFlagCachingTests {
 
         // Now we mock the server and expect the server response to be returned
         var foundFromServer: Flag? = null
-        flagsmithWithCache.getFeatureFlags() { result ->
+        flagsmithWithCache.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromServer =
@@ -260,7 +277,7 @@ class FeatureFlagCachingTests {
 
         // First time around we should get the default flag values
         var foundFromCache: Flag? = null
-        flagsmithWithCache.getFeatureFlags() { result ->
+        flagsmithWithCache.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromCache =
@@ -273,7 +290,7 @@ class FeatureFlagCachingTests {
 
         // Now we mock the successful request and expect the server values
         var foundFromServer: Flag? = null
-        flagsmithWithCache.getFeatureFlags() { result ->
+        flagsmithWithCache.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromServer =
@@ -292,8 +309,8 @@ class FeatureFlagCachingTests {
 
         // First time around we should be successful and cache the response
         var foundFromServer: Flag? = null
-        runBlocking { flagsmithWithCache.clearCache() }
-        flagsmithWithCache.getFeatureFlags(identity = "person") { result ->
+        runBlocking { flagsmithWithCacheIdentity.clearCache() }
+        flagsmithWithCacheIdentity.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromServer =
@@ -307,17 +324,18 @@ class FeatureFlagCachingTests {
         // Now get a new Flagsmith instance with the same cache and expect the cached response to be returned
         val newFlagsmithWithCache = Flagsmith(
             environmentKey = "",
+            identity = "person",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,
             cacheConfig = FlagsmithCacheConfig(
                 enableCache = true,
-                cacheDirectoryPath = CACHE_DIR
+                cacheDirectoryPath = CACHE_DIR_IDENTITY
             )
         )
 
         // Now we mock the failure and expect the cached response to be returned from the new flagsmith instance
         var foundFromCache: Flag? = null
-        newFlagsmithWithCache.getFeatureFlags(identity = "person") { result ->
+        newFlagsmithWithCache.getFeatureFlags { result ->
             Assert.assertTrue(
                 "The request will fail but we should be successful as we fall back on the cache",
                 result.isSuccess
@@ -339,8 +357,8 @@ class FeatureFlagCachingTests {
 
         // First time around we should be successful and cache the response
         var foundFromServer: Flag? = null
-        runBlocking { flagsmithWithCache.clearCache() }
-        flagsmithWithCache.getFeatureFlags(identity = "person") { result ->
+        runBlocking { flagsmithWithCacheIdentity.clearCache() }
+        flagsmithWithCacheIdentity.getFeatureFlags { result ->
             Assert.assertTrue(result.isSuccess)
 
             foundFromServer =
@@ -354,11 +372,12 @@ class FeatureFlagCachingTests {
         // Now get a new Flagsmith instance with the same cache and evict the cache straight away
         val newFlagsmithWithClearedCache = Flagsmith(
             environmentKey = "",
+            identity = "person",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,
             cacheConfig = FlagsmithCacheConfig(
                 enableCache = true,
-                cacheDirectoryPath = CACHE_DIR
+                cacheDirectoryPath = CACHE_DIR_IDENTITY
             )
         )
         runBlocking { newFlagsmithWithClearedCache.clearCache() }
@@ -366,7 +385,7 @@ class FeatureFlagCachingTests {
         // Now we mock the failure and expect the get to fail as we don't have the cache to fall back on
         var foundFromCache: Flag? = null
         val hasFinishedGetRequest = AtomicBoolean(false)
-        newFlagsmithWithClearedCache.getFeatureFlags(identity = "person") { result ->
+        newFlagsmithWithClearedCache.getFeatureFlags { result ->
             Assert.assertFalse("This un-cached response should fail", result.isSuccess)
 
             foundFromCache =
@@ -389,7 +408,7 @@ class FeatureFlagCachingTests {
             enableAnalytics = false,
             cacheConfig = FlagsmithCacheConfig(
                 enableCache = true,
-                cacheDirectoryPath = CACHE_DIR,
+                cacheDirectoryPath = CACHE_DIR_ENV,
                 cacheTTLSeconds = 10,
                 acceptStaleCache = true
             )
