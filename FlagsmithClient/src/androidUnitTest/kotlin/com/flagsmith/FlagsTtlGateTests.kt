@@ -31,10 +31,6 @@ private const val PAST_TTL_OFFSET_MILLIS = 4_000_000L
  * successful fetch, `getFeatureFlags` must answer from memory without issuing an HTTP request.
  * Request counts are pinned with MockServer's VerificationTimes.exactly.
  *
- * Note: while the Ktor HTTP cache is still installed (removed in a later commit), tests that need
- * a *genuine* network request after a previous successful fetch must also delete the Ktor
- * `flagsmith/` subdirectory - otherwise the still-fresh HTTP cache serves the request and the
- * count never moves.
  */
 class FlagsTtlGateTests {
 
@@ -70,10 +66,6 @@ class FlagsTtlGateTests {
 
     private fun List<Flag>.withValueFlag(): Flag? = find { it.feature.name == "with-value" }
 
-    private fun removeKtorHttpCache() {
-        File("$GATE_CACHE_DIR/flagsmith").deleteRecursively()
-    }
-
     @Test
     fun `g1 - second call within ttl is served from memory with exactly one request`() = runBlocking<Unit> {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
@@ -103,9 +95,6 @@ class FlagsTtlGateTests {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
         assertTrue(instance.getFeatureFlags().isSuccess)
 
-        // Expire our TTL gate; the Ktor HTTP cache is still fresh in real time and would serve
-        // the second call, so remove it to prove a genuine request happens.
-        removeKtorHttpCache()
         offset += PAST_TTL_OFFSET_MILLIS
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
         assertTrue(instance.getFeatureFlags().isSuccess)
@@ -239,7 +228,6 @@ class FlagsTtlGateTests {
         val first = testFlagsmith(baseUrl, identity = "person", cacheConfig = gateCacheConfig())
         assertTrue(first.getFeatureFlags().isSuccess)
 
-        removeKtorHttpCache()
         mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
         val second = testFlagsmith(
             baseUrl,
@@ -276,7 +264,6 @@ class FlagsTtlGateTests {
         assertTrue(first.isSuccess)
         assertTrue(first.getOrThrow().isEmpty())
 
-        removeKtorHttpCache()
         offset += PAST_TTL_OFFSET_MILLIS
         mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
 
@@ -294,7 +281,6 @@ class FlagsTtlGateTests {
         val first = testFlagsmith(baseUrl, identity = "person", cacheConfig = gateCacheConfig())
         assertTrue(first.getFeatureFlags().isSuccess)
 
-        removeKtorHttpCache()
         mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
         val second = testFlagsmith(
             baseUrl,

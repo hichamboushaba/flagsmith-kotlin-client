@@ -29,20 +29,27 @@ flagsmith.getFeatureFlags { result -> /* ... */ }
   `IllegalStateException` on an instance created without an `identity`.
 - Changing identity means creating a new instance; call `close()` on the old one.
 
-## Last-known flags (offline cold start)
+## Flags cache (offline cold start + TTL gate)
 
-When `enableCache = true`, the library persists the flags most recently emitted to
-`flagUpdateFlow` (a `StateFlow<List<Flag>>`) in a small snapshot file next to the HTTP cache.
-The flow is primed from that snapshot on first access — synchronously, before any network call —
-so reading `flagUpdateFlow.value` at startup returns the last known flags instead of an empty list,
-even offline.
+With `enableCache = true`, the library caches the most recently fetched flags in memory **and** in a
+small snapshot file next to the cache directory, gated by `cacheTTLSeconds`:
 
-- The snapshot is written on every successful flags fetch or trait update; `transient = true`
-  responses are never persisted, and `defaultFlags` never reach the flow or the snapshot.
-- `clearCache()` deletes both the HTTP cache and the snapshot; flags requested before the call are
-  discarded. The flow's current value is left untouched.
-- Staleness follows `cacheTTLSeconds` unless `acceptStaleCache = true`, in which case the snapshot
-  is served regardless of age.
+- **Within the TTL, `getFeatureFlags()` is answered from memory and issues no HTTP request at all.**
+  This survives process death: the snapshot seeds both `flagUpdateFlow` and the TTL clock, so an app
+  restarted repeatedly within the TTL makes zero flag requests.
+- `forceRefresh = true` bypasses the gate. So do `traits != null` (a POST) and `transient = true`.
+- On a failed fetch, `acceptStaleCache = true` makes the call return `Result.success` with the
+  last-known flags instead of degrading to `defaultFlags` — an empty environment is served as an
+  empty list, not as defaults. With `acceptStaleCache = false` (default), the failure falls back to
+  `defaultFlags` as before.
+- `clearCache()` resets the flow to `defaultFlags`, clears the TTL clock and deletes the snapshot.
+- **`cacheSize` was removed** in 0.2.0 — the flags cache is bounded internally.
+- **`getTrait()`, `getTraits()` and `getIdentity()` are never cached** and always hit the network —
+  they are cold-path reads; call them sparingly (see the migration note above).
+
+The snapshot is written on every successful flags fetch or trait update; `transient = true`
+responses are never persisted, and `defaultFlags` never reach the flow or the snapshot. Upgrading
+from 0.1.x: the old Ktor HTTP-cache directory is reclaimed automatically on the first write.
 
 ---------
 

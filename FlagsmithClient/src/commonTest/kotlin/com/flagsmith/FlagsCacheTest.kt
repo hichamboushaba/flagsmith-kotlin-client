@@ -2,7 +2,7 @@ package com.flagsmith
 
 import com.flagsmith.entities.Feature
 import com.flagsmith.entities.Flag
-import com.flagsmith.internal.LastKnownFlagsStore
+import com.flagsmith.internal.FlagsCache
 import kotlinx.coroutines.test.runTest
 import okio.Path.Companion.toPath
 import okio.buffer
@@ -15,10 +15,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-class LastKnownFlagsStoreTest {
+class FlagsCacheTest {
 
     private val baseDir = "/cache".toPath()
-    private val scope = LastKnownFlagsStore.Scope(
+    private val scope = FlagsCache.Scope(
         baseUrl = "https://edge.api.flagsmith.com/api/v1/",
         environmentKey = "env-key",
         identity = "person"
@@ -31,9 +31,9 @@ class LastKnownFlagsStoreTest {
         fileSystem: FakeFileSystem,
         ttlSeconds: Long = 3600,
         acceptStale: Boolean = false,
-        scope: LastKnownFlagsStore.Scope = this.scope,
+        scope: FlagsCache.Scope = this.scope,
         nowMillis: () -> Long = { now }
-    ) = LastKnownFlagsStore(
+    ) = FlagsCache(
         baseDirectory = baseDir,
         scope = scope,
         ttlSeconds = ttlSeconds,
@@ -214,7 +214,7 @@ class LastKnownFlagsStoreTest {
     fun pruningKeepsOnlyTheNewestFiles() = runTest {
         val fs = FakeFileSystem()
         val s = store(fs)
-        val dir = baseDir / "flagsmith-last-known"
+        val dir = s.file.parent!!
         fs.createDirectories(dir)
 
         repeat(6) { index ->

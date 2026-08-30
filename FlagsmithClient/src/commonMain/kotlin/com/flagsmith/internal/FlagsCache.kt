@@ -15,7 +15,8 @@ import kotlinx.serialization.encodeToString
 import okio.*
 import okio.ByteString.Companion.encodeUtf8
 
-private const val DIR_NAME = "flagsmith-last-known"
+private const val DIR_NAME = "flagsmith-flags-cache"
+private const val LEGACY_HTTP_CACHE_DIR = "flagsmith"
 private const val FORMAT_VERSION = 1
 private const val MAX_FILE_BYTES = 1L shl 20 // 1 MB
 private const val MAX_FILES = 4
@@ -30,7 +31,7 @@ private const val MAX_FILES = 4
  * safe against concurrent writes: a reader observes either the complete old file or the complete
  * new one.
  */
-internal class LastKnownFlagsStore(
+internal class FlagsCache(
     baseDirectory: Path,
     scope: Scope,
     private val ttlSeconds: Long,
@@ -42,7 +43,7 @@ internal class LastKnownFlagsStore(
     internal data class Scope(val baseUrl: String, val environmentKey: String, val identity: String?)
 
     @Serializable
-    private data class LastKnownFlags(
+    private data class CachedFlags(
         val version: Int = FORMAT_VERSION,
         val scopeHash: String,
         @SerialName("saved_at_epoch_seconds") val savedAtEpochSeconds: Long,
@@ -52,6 +53,7 @@ internal class LastKnownFlagsStore(
     internal val scopeHash: String =
         "${scope.baseUrl}|${scope.environmentKey}|${scope.identity ?: ""}".encodeUtf8().sha256().hex()
 
+    private val baseDirectory: Path = baseDirectory
     private val directory: Path = baseDirectory / DIR_NAME
 
     // Exposed for tests only.
@@ -59,6 +61,7 @@ internal class LastKnownFlagsStore(
 
     private val ioMutex = Mutex()
     private var lastWrittenSeq = 0L // guarded by ioMutex
+    private var legacyHttpCacheCleaned = false // guarded by ioMutex
 
     internal data class Snapshot(val flags: List<Flag>, val savedAtEpochSeconds: Long)
 
@@ -74,7 +77,7 @@ internal class LastKnownFlagsStore(
         if (!fileSystem.exists(file)) return null
         if ((fileSystem.metadata(file).size ?: 0L) > MAX_FILE_BYTES) return null
 
-        val snapshot = json.decodeFromString<LastKnownFlags>(
+        val snapshot = json.decodeFromString<CachedFlags>(
             fileSystem.source(file).buffer().use { it.readUtf8() }
         )
         if (snapshot.version != FORMAT_VERSION || snapshot.scopeHash != scopeHash) return null
@@ -91,6 +94,7 @@ internal class LastKnownFlagsStore(
      */
     suspend fun write(flags: List<Flag>, seq: Long): Unit = withContext(Dispatchers.IO) {
         ioMutex.withLock {
+            cleanLegacyHttpCacheLocked()
             if (seq <= lastWrittenSeq) return@withLock
             lastWrittenSeq = seq
             runCatching {
@@ -99,7 +103,7 @@ internal class LastKnownFlagsStore(
                 fileSystem.sink(tmp).buffer().use { output ->
                     output.writeUtf8(
                         json.encodeToString(
-                            LastKnownFlags(
+                            CachedFlags(
                                 scopeHash = scopeHash,
                                 savedAtEpochSeconds = nowMillis() / 1000,
                                 flags = flags
@@ -123,6 +127,16 @@ internal class LastKnownFlagsStore(
             lastWrittenSeq = maxOf(lastWrittenSeq, barrierSeq)
             runCatching { fileSystem.deleteRecursively(directory, mustExist = false) }
         }
+    }
+
+    /**
+     * 0.1.x installations carried a Ktor HTTP cache under `<cacheDirectoryPath>/flagsmith`;
+     * nothing reads it anymore, so reclaim it once on the first write. Best-effort.
+     */
+    private fun cleanLegacyHttpCacheLocked() {
+        if (legacyHttpCacheCleaned) return
+        legacyHttpCacheCleaned = true
+        runCatching { fileSystem.deleteRecursively(baseDirectory / LEGACY_HTTP_CACHE_DIR, mustExist = false) }
     }
 
     private fun moveAtomicallyOrFallback(tmp: Path, target: Path) {

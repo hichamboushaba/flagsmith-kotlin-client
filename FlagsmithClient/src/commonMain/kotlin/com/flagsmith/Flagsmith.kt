@@ -4,8 +4,7 @@ import com.flagsmith.entities.*
 import com.flagsmith.internal.FlagsmithAnalytics
 import com.flagsmith.internal.FlagsmithEventService
 import com.flagsmith.internal.FlagsmithEventTimeTracker
-import com.flagsmith.internal.LastKnownFlagsStore
-import com.flagsmith.internal.http.ClearableHttpCache
+import com.flagsmith.internal.FlagsCache
 import com.flagsmith.internal.http.FlagsmithApi
 import com.flagsmith.internal.http.FlagsmithEventApi
 import io.ktor.util.date.getTimeMillis
@@ -68,7 +67,6 @@ class Flagsmith internal constructor(
     private var sseUpdatesJob: Job? = null
 
     private val flagSmithApi: FlagsmithApi
-    private val cache: ClearableHttpCache?
     private val analytics: FlagsmithAnalytics?
 
     // The last time we got an event from the SSE stream or via the API
@@ -86,11 +84,11 @@ class Flagsmith internal constructor(
         }
     }
 
-    private val lastKnownFlagsStore: LastKnownFlagsStore? =
+    private val flagsCache: FlagsCache? =
         if (cacheConfig.enableCache) {
-            LastKnownFlagsStore(
+            FlagsCache(
                 baseDirectory = cacheConfig.cacheDirectoryPath.toPath(),
-                scope = LastKnownFlagsStore.Scope(baseUrl, environmentKey, identity),
+                scope = FlagsCache.Scope(baseUrl, environmentKey, identity),
                 ttlSeconds = cacheConfig.cacheTTLSeconds,
                 acceptStale = cacheConfig.acceptStaleCache,
                 nowMillis = nowMillis,
@@ -106,7 +104,7 @@ class Flagsmith internal constructor(
     private class Primed(val flags: List<Flag>, val fetchedAtMillis: Long)
 
     private val primed: Primed by lazy {
-        lastKnownFlagsStore?.readIfValid()
+        flagsCache?.readIfValid()
             .let { Primed(it?.flags ?: defaultFlags, it?.savedAtEpochSeconds?.times(1000) ?: 0L) }
     }
 
@@ -159,7 +157,7 @@ class Flagsmith internal constructor(
             }
         }
         if (accepted && persist) {
-            lastKnownFlagsStore?.write(flags, seq)
+            flagsCache?.write(flags, seq)
         }
     }
 
@@ -168,20 +166,16 @@ class Flagsmith internal constructor(
             error("Real-time updates are enabled but no event API factory was provided")
         }
 
-        flagsmithApiFactory.create(
+        flagSmithApi = flagsmithApiFactory.create(
             baseUrl = baseUrl,
             environmentKey = environmentKey,
             userAgentOverride = userAgentOverride,
-            cacheConfig = cacheConfig,
             requestTimeoutSeconds = requestTimeoutSeconds,
             readTimeoutSeconds = readTimeoutSeconds,
             writeTimeoutSeconds = writeTimeoutSeconds,
             timeTracker = this,
             json = defaultJson
-        ).let { (api, cache) ->
-            flagSmithApi = api
-            this.cache = cache
-        }
+        )
 
         analytics = if (enableAnalytics) {
             requireNotNull(flagsmithAnalyticsFactory) {
@@ -223,7 +217,7 @@ class Flagsmith internal constructor(
             } else {
                 // Pass transient flag only if it's true
                 // TODO: revisit this when https://github.com/Flagsmith/flagsmith/issues/5260 is resolved
-                flagSmithApi.getIdentityFlagsAndTraits(identity, transient.takeIf { it }, forceRefresh = forceRefresh)
+                flagSmithApi.getIdentityFlagsAndTraits(identity, transient.takeIf { it })
                     .map { it.flags }
             }
         } else {
@@ -231,7 +225,7 @@ class Flagsmith internal constructor(
                 // Only reachable in environment mode - see [requireIdentity].
                 error(IDENTITY_REQUIRED_MESSAGE)
             } else {
-                flagSmithApi.getFlags(forceRefresh = forceRefresh)
+                flagSmithApi.getFlags()
             }
         }
 
@@ -321,12 +315,7 @@ class Flagsmith internal constructor(
             seqCounter
         }
         try {
-            cache?.invalidate()
-        } catch (e: Exception) {
-            println("Error clearing cache, ${e.stackTraceToString()}")
-        }
-        try {
-            lastKnownFlagsStore?.clear(barrier)
+            flagsCache?.clear(barrier)
         } catch (e: Exception) {
             println("Error clearing last-known flags, ${e.stackTraceToString()}")
         }
@@ -366,10 +355,6 @@ class Flagsmith internal constructor(
 
             // Check whether this event is anything new
             if (lastEventUpdate > lastFlagFetchTime) {
-                // First evict the cache otherwise we'll be stuck with the old values.
-                // HTTP cache only - the last-known-flags snapshot survives on purpose, so an
-                // offline restart after an SSE refresh still primes.
-                cache?.invalidate()
                 lastFlagFetchTime = lastEventUpdate
 
                 // Now we can get the new values, which will automatically be emitted to the
