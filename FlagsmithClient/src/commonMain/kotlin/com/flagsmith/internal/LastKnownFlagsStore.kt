@@ -12,12 +12,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
-import okio.FileSystem
-import okio.IOException
-import okio.Path
+import okio.*
 import okio.ByteString.Companion.encodeUtf8
-import okio.buffer
-import okio.use
 
 private const val DIR_NAME = "flagsmith-last-known"
 private const val FORMAT_VERSION = 1
