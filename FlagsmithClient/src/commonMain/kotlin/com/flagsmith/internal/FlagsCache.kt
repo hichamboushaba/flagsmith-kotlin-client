@@ -44,24 +44,29 @@ internal class FlagsCache(
     internal data class Scope(val baseUrl: String, val environmentKey: String, val identity: String?)
 
     /** A valid cached document: the flags plus the instant they were fetched at. */
-    internal data class Snapshot(val flags: List<Flag>, val savedAtEpochSeconds: Long)
+    internal data class Snapshot(val flags: List<Flag>, val savedAtEpochMillis: Long)
 
     /** On-disk format. Private: nothing outside this class should depend on it. */
     @Serializable
     private data class CachedFlags(
         val version: Int = FORMAT_VERSION,
         val scopeHash: String,
-        val savedAtEpochSeconds: Long,
+        val savedAtEpochMillis: Long,
         val flags: List<Flag>
     )
 
-    internal val scopeHash: String =
-        "${scope.baseUrl}|${scope.environmentKey}|${scope.identity ?: ""}".encodeUtf8().sha256().hex()
+    // The identity is tagged rather than defaulted to "", so an environment-scoped instance can
+    // never share a file with one built from an empty identity string.
+    internal val scopeHash: String = with(scope) {
+        "$baseUrl|$environmentKey|${identity?.let { "identity:$it" } ?: "environment"}"
+            .encodeUtf8().sha256().hex()
+    }
 
     private val directory: Path = baseDirectory / DIR_NAME
 
     // Exposed for tests only.
     internal val file: Path = directory / "$scopeHash.json"
+    private val tmpFile: Path = directory / "$scopeHash.json.tmp"
 
     private val ioMutex = Mutex()
     private var lastWrittenSeq = 0L // guarded by ioMutex
@@ -78,10 +83,12 @@ internal class FlagsCache(
         val cached = runCatching { readCachedFlags() }.getOrNull() ?: return null
         if (cached.version != FORMAT_VERSION || cached.scopeHash != scopeHash) return null
 
-        val ageSeconds = ((nowMillis() / 1000) - cached.savedAtEpochSeconds).coerceAtLeast(0)
-        if (!acceptStale && ageSeconds > ttl.inWholeSeconds) return null
+        // A backwards clock adjustment clamps to age zero rather than discarding a perfectly
+        // good snapshot. The caller's TTL gate is deliberately stricter and will refetch.
+        val ageMillis = (nowMillis() - cached.savedAtEpochMillis).coerceAtLeast(0)
+        if (!acceptStale && ageMillis > ttl.inWholeMilliseconds) return null
 
-        return Snapshot(cached.flags, cached.savedAtEpochSeconds)
+        return Snapshot(cached.flags, cached.savedAtEpochMillis)
     }
 
     /**
@@ -99,14 +106,16 @@ internal class FlagsCache(
     }
 
     /**
-     * Deletes the cache directory. [barrierSeq] is the sequence barrier captured by
-     * `Flagsmith.clearCache()`; any write requested with a lower or equal sequence is dropped, so
-     * an operation started before the clear can never repopulate the directory afterwards.
+     * Deletes this scope's snapshot, leaving sibling scopes sharing the directory untouched.
+     * [barrierSeq] is the sequence barrier captured by `Flagsmith.clearCache()`; any write
+     * requested with a lower or equal sequence is dropped, so an operation started before the
+     * clear can never repopulate the file afterwards.
      */
     suspend fun clear(barrierSeq: Long): Unit = withContext(Dispatchers.IO) {
         ioMutex.withLock {
             lastWrittenSeq = maxOf(lastWrittenSeq, barrierSeq)
-            runCatching { fileSystem.deleteRecursively(directory, mustExist = false) }
+            runCatching { fileSystem.delete(file, mustExist = false) }
+            runCatching { fileSystem.delete(tmpFile, mustExist = false) }
         }
     }
 
@@ -117,17 +126,17 @@ internal class FlagsCache(
     }
 
     private fun writeSnapshot(flags: List<Flag>) {
+        val encoded = json.encodeToString(
+            CachedFlags(scopeHash = scopeHash, savedAtEpochMillis = nowMillis(), flags = flags)
+        ).encodeUtf8()
+        // Checked before writing so an oversized document leaves the previous snapshot intact
+        // instead of replacing it with a file that readIfValid would reject anyway.
+        if (encoded.size > maxFileBytes) return
+
         fileSystem.createDirectories(directory, mustCreate = false)
+        fileSystem.sink(tmpFile).buffer().use { it.write(encoded) }
 
-        val tmp = directory / "$scopeHash.json.tmp"
-        val cached = CachedFlags(
-            scopeHash = scopeHash,
-            savedAtEpochSeconds = nowMillis() / 1000,
-            flags = flags
-        )
-        fileSystem.sink(tmp).buffer().use { it.writeUtf8(json.encodeToString(cached)) }
-
-        moveAtomicallyOrFallback(tmp, file)
+        moveAtomicallyOrFallback(tmpFile, file)
         pruneToNewest()
     }
 
@@ -178,9 +187,10 @@ internal class FlagsCache(
                 .filterNot { it.name.endsWith(".tmp") }
                 // Never prune the file we just wrote: on filesystems with coarse mtime
                 // granularity the sort order is arbitrary when several files share a tick.
+                // It counts towards maxFiles, hence `maxFiles - 1` siblings are kept.
                 .filterNot { it == file }
                 .sortedByDescending { fileSystem.metadata(it).lastModifiedAtMillis ?: 0L }
-                .drop(maxFiles)
+                .drop(maxFiles - 1)
                 .forEach { fileSystem.delete(it) }
         }
     }

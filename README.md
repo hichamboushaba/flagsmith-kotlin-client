@@ -47,8 +47,11 @@ small snapshot file next to the cache directory, gated by `cacheTTL` (a `kotlin.
 - `getTrait()`, `getTraits()` and `getIdentity()` are never cached and always hit the network —
   they are cold-path reads; call them sparingly.
 - `maxSnapshotSizeBytes` caps the size of a single cached snapshot; larger snapshots are skipped.
-- The snapshot is written on every successful flags fetch or trait update; `transient = true`
-  responses are never persisted, and `defaultFlags` never reach the flow or the snapshot.
+- The snapshot is written on every successful flags fetch or trait update. Transient requests —
+  `transient = true`, or traits marked `Trait.transient` — are emitted but never cached, so they
+  neither reach the snapshot nor satisfy a later gated call. A `defaultFlags` fallback from a
+  failed fetch is returned to the caller only: it never overwrites the flow or the snapshot.
+  (`defaultFlags` do seed the flow when there is no snapshot, and `clearCache()` restores them.)
 
 See [CHANGELOG.md](CHANGELOG.md) for the full 0.2.0 change list and migration notes.
 

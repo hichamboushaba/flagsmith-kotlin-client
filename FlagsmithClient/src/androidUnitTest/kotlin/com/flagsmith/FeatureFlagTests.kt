@@ -152,9 +152,9 @@ class FeatureFlagTests {
 
     @Test
     fun testThrowsWhenIdentityScopedApiUsedWithoutIdentity() {
-        // Call the suspend methods directly: the exception is thrown synchronously before any
-        // network work, so it propagates out of runBlocking. The callback-based wrappers cannot
-        // deliver it (their launched coroutine dies before invoking the callback).
+        // The suspend methods throw synchronously, before any network work, so the exception
+        // propagates out of runBlocking. The callback wrappers deliver it as Result.failure
+        // instead - see testIdentityScopedCallbackDeliversFailureWithoutIdentity.
         val exception = assertThrows(IllegalStateException::class.java) {
             runBlocking { flagsmith().getTraits() }
         }
@@ -163,6 +163,17 @@ class FeatureFlagTests {
                 "Pass `identity` to the Flagsmith factory to use identity-scoped APIs.",
             exception.message
         )
+    }
+
+    @Test
+    fun testIdentityScopedCallbackDeliversFailureWithoutIdentity() {
+        var result: Result<List<Trait>>? = null
+        flagsmith().getTraits { result = it }
+
+        // Unconfined dispatch means the callback has already run by the time we get here.
+        assertNotNull("The callback must be invoked, not swallowed by the launched coroutine", result)
+        assertTrue(result!!.isFailure)
+        assertTrue(result!!.exceptionOrNull() is IllegalStateException)
     }
 
     @Test

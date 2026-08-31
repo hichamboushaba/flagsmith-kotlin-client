@@ -301,6 +301,48 @@ class FlagsTtlGateTests {
     }
 
     @Test
+    fun `g13 - a transient response does not advance the gate`() = runBlocking<Unit> {
+        val instance = testFlagsmith(baseUrl, identity = "person", cacheConfig = gateCacheConfig())
+
+        mockServer.mockResponseFor(MockEndpoint.GET_TRANSIENT_IDENTITIES)
+        assertTrue(instance.getFeatureFlags(transient = true).isSuccess)
+
+        // A transient identity is not this identity's stored state, so the next ordinary call
+        // must still go to the server rather than be gated on it.
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        val ordinary = instance.getFeatureFlags()
+
+        assertTrue(ordinary.isSuccess)
+        assertEquals(756.0, ordinary.getOrThrow().withValueFlag()?.featureStateValue)
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("GET"),
+            VerificationTimes.exactly(2)
+        )
+    }
+
+    @Test
+    fun `g14 - caching disabled also disables stale serving`() = runBlocking<Unit> {
+        val instance = testFlagsmith(
+            baseUrl,
+            identity = "person",
+            cacheConfig = FlagsmithCacheConfig(enableCache = false, acceptStaleCache = true),
+            defaultFlags = defaultFlags
+        )
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        assertTrue(instance.getFeatureFlags().isSuccess)
+
+        mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
+        val result = instance.getFeatureFlags()
+
+        assertTrue(result.isSuccess)
+        assertEquals(
+            "acceptStaleCache must not resurrect in-memory flags when the cache is disabled",
+            "default",
+            result.getOrThrow().first().featureStateValue
+        )
+    }
+
+    @Test
     fun `g12 - clearCache resets the gate and the flow`() = runBlocking<Unit> {
         val instance = testFlagsmith(
             baseUrl,

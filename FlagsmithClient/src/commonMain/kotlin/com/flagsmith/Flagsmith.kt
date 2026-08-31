@@ -98,10 +98,7 @@ class Flagsmith internal constructor(
      */
     private val primed: Primed by lazy {
         val snapshot = flagsCache?.readIfValid()
-        Primed(
-            flags = snapshot?.flags ?: defaultFlags,
-            fetchedAtMillis = snapshot?.savedAtEpochSeconds?.times(1000) ?: 0L
-        )
+        Primed(flags = snapshot?.flags ?: defaultFlags, fetchedAtMillis = snapshot?.savedAtEpochMillis ?: 0L)
     }
 
     /**
@@ -167,10 +164,10 @@ class Flagsmith internal constructor(
         val seq = beginOperation()
         val result = fetchFlags(traits, transient)
 
-        // Emit and persist BEFORE falling back: a defaults fallback must never overwrite the
+        // Emit and cache BEFORE falling back: a defaults fallback must never overwrite the
         // last-known flags in the flow, nor reach the disk snapshot.
         if (result.isSuccess) {
-            applyFlags(result.getOrThrow(), seq, persist = !transient)
+            applyFlags(result.getOrThrow(), seq, cacheable = isCacheable(transient, traits))
         }
 
         return result.recoverCatching { error -> lastKnownFlagsOrDefaults(error) }
@@ -197,7 +194,7 @@ class Flagsmith internal constructor(
         val result = flagSmithApi.postTraits(IdentityAndTraits(identity, traits))
 
         if (result.isSuccess) {
-            applyFlags(result.getOrThrow().flags, seq, persist = true)
+            applyFlags(result.getOrThrow().flags, seq, cacheable = isCacheable(transient = false, traits = traits))
         }
 
         return result.map { response ->
@@ -261,6 +258,8 @@ class Flagsmith internal constructor(
 
         return stateMutex.withLock {
             val fetchedAt = fetchedAtMillisLocked()
+            // A backwards clock adjustment makes this negative, which misses the gate and
+            // refetches. That is deliberate: unlike priming, a miss here only costs a request.
             val age = nowMillis() - fetchedAt
             flagsState.value.takeIf { fetchedAt > 0L && age in 0..cacheConfig.cacheTTL.inWholeMilliseconds }
         }
@@ -290,7 +289,7 @@ class Flagsmith internal constructor(
     private suspend fun lastKnownFlagsOrDefaults(error: Throwable): List<Flag> {
         val haveFetchedBefore = stateMutex.withLock { fetchedAtMillisLocked() > 0L }
 
-        return if (cacheConfig.acceptStaleCache && haveFetchedBefore) {
+        return if (cacheConfig.enableCache && cacheConfig.acceptStaleCache && haveFetchedBefore) {
             flagsState.value
         } else {
             defaultFlags.ifEmpty { throw error }
@@ -301,22 +300,30 @@ class Flagsmith internal constructor(
     private suspend fun beginOperation(): Long = stateMutex.withLock { ++seqCounter }
 
     /**
-     * Applies [flags] to [flagsState] unless a newer operation has already applied (or [clearCache]
-     * has invalidated everything up to the current sequence). When accepted and [persist] is set,
-     * the flags are also written to the [flagsCache].
+     * A transient identity, or traits the server won't store, produce a document that doesn't
+     * represent this identity's stored state. Such a document is still emitted, but it must
+     * neither reach the disk snapshot nor satisfy a later TTL-gated call.
      */
-    private suspend fun applyFlags(flags: List<Flag>, seq: Long, persist: Boolean) {
+    private fun isCacheable(transient: Boolean, traits: List<Trait>?): Boolean =
+        !transient && traits.orEmpty().none { it.transient }
+
+    /**
+     * Applies [flags] to [flagsState] unless a newer operation has already applied (or [clearCache]
+     * has invalidated everything up to the current sequence). Only a [cacheable] document advances
+     * the TTL clock and is written to the [flagsCache].
+     */
+    private suspend fun applyFlags(flags: List<Flag>, seq: Long, cacheable: Boolean) {
         val accepted = stateMutex.withLock {
             if (seq <= lastAppliedSeq) {
                 false
             } else {
                 lastAppliedSeq = seq
-                lastSuccessfulFetchAtMillis = nowMillis()
+                if (cacheable) lastSuccessfulFetchAtMillis = nowMillis()
                 flagsState.value = flags
                 true
             }
         }
-        if (accepted && persist) {
+        if (accepted && cacheable) {
             flagsCache?.write(flags, seq)
         }
     }

@@ -34,12 +34,14 @@ class FlagsCacheTest {
         ttl: Duration = 3600.seconds,
         acceptStale: Boolean = false,
         scope: FlagsCache.Scope = this.scope,
+        maxFileBytes: Long = 1L shl 20,
         nowMillis: () -> Long = { now }
     ) = FlagsCache(
         baseDirectory = baseDir,
         scope = scope,
         ttl = ttl,
         acceptStale = acceptStale,
+        maxFileBytes = maxFileBytes,
         fileSystem = fileSystem,
         nowMillis = nowMillis
     )
@@ -68,9 +70,9 @@ class FlagsCacheTest {
         val loaded = s.readIfValid()
         assertNotNull(loaded)
         assertEquals(sampleFlags, loaded.flags)
-        // The snapshot timestamp must round-trip so the TTL gate can be seeded after process
-        // death. 1000 = nowMillis()/1000 with the fixed test clock of 1_000_000.
-        assertEquals(1000L, loaded.savedAtEpochSeconds)
+        // The snapshot timestamp must round-trip in the same unit the TTL gate uses, so the gate
+        // can be seeded after process death without losing sub-second precision.
+        assertEquals(now, loaded.savedAtEpochMillis)
     }
 
     @Test
@@ -213,6 +215,34 @@ class FlagsCacheTest {
     }
 
     @Test
+    fun oversizedDocumentLeavesThePreviousSnapshotIntact() = runTest {
+        val fs = FakeFileSystem()
+        // Room for a one-flag document (a few hundred bytes) but not for two hundred of them.
+        val s = store(fs, maxFileBytes = 1024)
+        val small = listOf(flag("small", "value"))
+        s.write(small, seq = 1)
+
+        s.write(List(200) { flag("flag-$it", it.toDouble()) }, seq = 2)
+
+        assertEquals(small, s.readIfValid()?.flags)
+    }
+
+    @Test
+    fun clearLeavesOtherScopesUntouched() = runTest {
+        val fs = FakeFileSystem()
+        val personStore = store(fs)
+        val envStore = store(fs, scope = scope.copy(identity = null))
+
+        personStore.write(sampleFlags, seq = 1)
+        envStore.write(sampleFlags, seq = 1)
+
+        personStore.clear(barrierSeq = 1)
+
+        assertNull(personStore.readIfValid())
+        assertNotNull(envStore.readIfValid(), "Clearing one scope must not delete the others")
+    }
+
+    @Test
     fun pruningKeepsOnlyTheNewestFiles() = runTest {
         val fs = FakeFileSystem()
         val s = store(fs)
@@ -227,9 +257,9 @@ class FlagsCacheTest {
 
         val remaining = fs.list(dir).filterNot { it.name.endsWith(".tmp") }
         assertEquals(
-            5,
+            4,
             remaining.size,
-            "Expected pruning to cap the directory at 5 files (4 others + the one just written)"
+            "Expected pruning to cap the directory at maxFiles, including the one just written"
         )
         assertNotNull(
             s.readIfValid(),
