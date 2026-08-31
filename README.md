@@ -5,17 +5,22 @@ This is a fork of the original flagsmith Android client, updated to work with Ko
 
 ## Instance-scoped identity (breaking change in 0.2.0)
 
-The identity is now a property of the `Flagsmith` instance instead of a per-call argument. An instance
-is either identity-scoped or environment-scoped — never both:
+The identity is now a property of the `Flagsmith` instance instead of a per-call argument. Every
+instance reads exactly one document, always within its environment (`environmentKey` is part of
+every scope): with `identity` set, that document is the environment's flags **evaluated for that
+identity**; with `identity = null`, it is the environment's own default flags. An instance never
+mixes the two — switching identity, or also reading the environment defaults, means constructing a
+new instance (two instances sharing a `cacheDirectoryPath` don't conflict; give the pre-login one
+`enableAnalytics = false`).
 
 ```kotlin
 val flagsmith = Flagsmith(
     environmentKey = "...",
-    identity = "device-or-user-id",   // omit for environment-level flags only
+    identity = "device-or-user-id",   // omit to read the environment's own default flags
     cacheConfig = FlagsmithCacheConfig(
         enableCache = true,
         cacheDirectoryPath = context.cacheDir.absolutePath,
-        cacheTTLSeconds = 3600,
+        cacheTTL = 1.hours,
         acceptStaleCache = true,
     )
 )
