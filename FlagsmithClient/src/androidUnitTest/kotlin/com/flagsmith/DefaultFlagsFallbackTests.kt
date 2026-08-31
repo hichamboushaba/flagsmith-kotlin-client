@@ -30,8 +30,10 @@ import java.io.File
 import java.time.Duration
 import kotlin.test.assertTrue
 
-private const val CACHE_DIR_ENV = "cache-env"
-private const val CACHE_DIR_IDENTITY = "cache-identity"
+// One shared directory on purpose: the flags cache keys files by scope
+// (sha256 of baseUrl|environmentKey|identity), so environment-scoped and identity-scoped
+// instances coexist here exactly as they would with the app's real cache directory.
+private const val CACHE_DIR = "cache"
 
 /**
  * Covers the defaultFlags fallback for failed and timing-out flag fetches, and the interaction of
@@ -92,7 +94,7 @@ class DefaultFlagsFallbackTests {
             defaultFlags = defaultFlags,
             cacheConfig = FlagsmithCacheConfig(
                 enableCache = true,
-                cacheDirectoryPath = CACHE_DIR_ENV
+                cacheDirectoryPath = CACHE_DIR
             )
         )
 
@@ -104,7 +106,7 @@ class DefaultFlagsFallbackTests {
             defaultFlags = defaultFlags,
             cacheConfig = FlagsmithCacheConfig(
                 enableCache = true,
-                cacheDirectoryPath = CACHE_DIR_IDENTITY
+                cacheDirectoryPath = CACHE_DIR
             )
         )
 
@@ -144,8 +146,7 @@ class DefaultFlagsFallbackTests {
         mockServer.stop()
         // Recursive delete: File.delete() silently no-ops on non-empty directories, which would
         // leak snapshot state between tests.
-        File(CACHE_DIR_ENV).deleteRecursively()
-        File(CACHE_DIR_IDENTITY).deleteRecursively()
+        File(CACHE_DIR).deleteRecursively()
         appContext = null
     }
 
@@ -239,7 +240,7 @@ class DefaultFlagsFallbackTests {
             enableAnalytics = false,
             cacheConfig = FlagsmithCacheConfig(
                 enableCache = true,
-                cacheDirectoryPath = CACHE_DIR_IDENTITY
+                cacheDirectoryPath = CACHE_DIR
             )
         )
         runBlocking { newFlagsmithWithClearedCache.clearCache() }
