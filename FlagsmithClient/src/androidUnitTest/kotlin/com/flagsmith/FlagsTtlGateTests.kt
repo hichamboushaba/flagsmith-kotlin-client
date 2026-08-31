@@ -382,6 +382,34 @@ class FlagsTtlGateTests {
     }
 
     @Test
+    fun `g16 - a transient response is never served by a later gated call`() = runBlocking<Unit> {
+        val instance = testFlagsmith(baseUrl, identity = "person", cacheConfig = gateCacheConfig())
+
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        assertTrue(instance.getFeatureFlags().isSuccess)
+
+        // Still within the TTL of the ordinary fetch above. This overwrites flagUpdateFlow with a
+        // transient document, but must not become the document the gate hands out.
+        mockServer.mockResponseFor(MockEndpoint.GET_TRANSIENT_IDENTITIES)
+        val transient = instance.getFeatureFlags(transient = true)
+        assertTrue(transient.isSuccess)
+        assertNull(transient.getOrThrow().withValueFlag())
+
+        val gated = instance.getFeatureFlags()
+
+        assertTrue(gated.isSuccess)
+        assertEquals(
+            "The gate must serve the last cacheable document, not the transient one",
+            756.0,
+            gated.getOrThrow().withValueFlag()?.featureStateValue
+        )
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("GET"),
+            VerificationTimes.exactly(2)
+        )
+    }
+
+    @Test
     fun `g15 - caching disabled also disables stale serving`() = runBlocking<Unit> {
         val instance = testFlagsmith(
             baseUrl,

@@ -139,7 +139,7 @@ internal class FlagsCache(
         fileSystem.createDirectories(directory, mustCreate = false)
         fileSystem.sink(tmpFile).buffer().use { it.write(encoded) }
 
-        moveAtomicallyOrFallback(tmpFile, file)
+        replaceSnapshotWith(encoded)
         pruneToNewest()
     }
 
@@ -162,23 +162,28 @@ internal class FlagsCache(
         }
     }
 
-    private fun moveAtomicallyOrFallback(tmp: Path, target: Path) {
-        if (tryAtomicMove(tmp, target)) return
+    /**
+     * Moves the temp file over the snapshot, falling back to an in-place write of [encoded].
+     *
+     * The fallback deliberately writes from memory rather than copying from the temp file: another
+     * `FlagsCache` for the same scope (a second `Flagsmith` instance sharing the cache directory)
+     * resolves to the same paths and may have already consumed it. Copying would then fail with
+     * the target already truncated, leaving an empty file where a valid snapshot used to be.
+     */
+    private fun replaceSnapshotWith(encoded: ByteString) {
+        if (tryAtomicMove()) return
 
         // The target may already exist on filesystems where rename doesn't replace.
-        runCatching { fileSystem.delete(target) }
-        if (tryAtomicMove(tmp, target)) return
+        runCatching { fileSystem.delete(file) }
+        if (tryAtomicMove()) return
 
-        // Last resort: a direct, non-atomic copy. A torn result is rejected by readIfValid's
-        // parse and version checks, never surfaced as a crash.
-        fileSystem.sink(target).buffer().use { sink ->
-            fileSystem.source(tmp).buffer().use { source -> sink.writeAll(source) }
-        }
-        runCatching { fileSystem.delete(tmp) }
+        // Non-atomic, so a concurrent reader may observe a torn file; readIfValid rejects that.
+        fileSystem.sink(file).buffer().use { it.write(encoded) }
+        runCatching { fileSystem.delete(tmpFile) }
     }
 
-    private fun tryAtomicMove(tmp: Path, target: Path): Boolean = try {
-        fileSystem.atomicMove(tmp, target)
+    private fun tryAtomicMove(): Boolean = try {
+        fileSystem.atomicMove(tmpFile, file)
         true
     } catch (_: IOException) {
         false

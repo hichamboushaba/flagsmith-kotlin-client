@@ -6,6 +6,9 @@ import com.flagsmith.internal.FlagsCache
 import kotlinx.coroutines.test.runTest
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import okio.FileSystem
+import okio.ForwardingFileSystem
+import okio.Path
 import okio.Path.Companion.toPath
 import okio.buffer
 import okio.fakefilesystem.FakeFileSystem
@@ -30,7 +33,7 @@ class FlagsCacheTest {
     private val now = 1_000_000L
 
     private fun store(
-        fileSystem: FakeFileSystem,
+        fileSystem: FileSystem,
         ttl: Duration = 3600.seconds,
         acceptStale: Boolean = false,
         scope: FlagsCache.Scope = this.scope,
@@ -240,6 +243,25 @@ class FlagsCacheTest {
 
         assertNull(personStore.readIfValid())
         assertNotNull(envStore.readIfValid(), "Clearing one scope must not delete the others")
+    }
+
+    @Test
+    fun aSecondCacheForTheSameScopeCannotEmptyTheSnapshot() = runTest {
+        // A second FlagsCache for the same scope resolves to the same paths, so it can consume the
+        // shared temp file before this one moves it. The write must still land a complete
+        // document rather than truncating the snapshot to nothing.
+        val fs = object : ForwardingFileSystem(FakeFileSystem()) {
+            /** Steals the temp file just before the move, as a competing writer would. */
+            override fun atomicMove(source: Path, target: Path) {
+                delegate.delete(source, mustExist = false)
+                super.atomicMove(source, target)
+            }
+        }
+        val s = store(fs)
+
+        s.write(sampleFlags, seq = 1)
+
+        assertEquals(sampleFlags, s.readIfValid()?.flags)
     }
 
     @Test

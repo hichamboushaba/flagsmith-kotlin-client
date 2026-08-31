@@ -78,27 +78,27 @@ class Flagsmith internal constructor(
     // The last time we got an event from the SSE stream or via the API
     private var lastEventUpdate: Double = 0.0
 
-    // Guards [seqCounter], [lastAppliedSeq], [lastSuccessfulFetchAtMillis] and the [flagsState]
+    // Guards [seqCounter], [lastAppliedSeq], [cached] and the [flagsState]
     // write. Never held across IO.
     private val stateMutex = Mutex()
     private var seqCounter = 0L
     private var lastAppliedSeq = 0L
 
-    // Local fetch clock for the TTL gate: when we last applied a successful flag document.
-    // Three states: null = not yet resolved (falls back to the primed snapshot time),
-    // 0L = known-none (cleared), >0 = known. Never use [lastFlagFetchTime] here — that is the
-    // server's document timestamp and belongs to the SSE stream.
-    private var lastSuccessfulFetchAtMillis: Long? = null
+    // The document the TTL gate and the stale fallback may reuse, and when it was fetched
+    // (`0L` = nothing reusable). Deliberately NOT [flagsState]: the flow holds whatever was
+    // emitted last, including transient documents, which must never satisfy a gated call.
+    // `null` means "not resolved from [primed] yet". Never use [lastFlagFetchTime] as the clock
+    // here — that is the server's document timestamp and belongs to the SSE stream.
+    private var cached: CachedDocument? = null
 
     /**
-     * The one-time priming read, shared by [flagsState] and the TTL gate: the flags to start from,
-     * and the instant they were fetched at (`0L` when there was no valid snapshot). Seeding the
-     * gate from disk keeps it warm across process death, exactly as it was warm from the previous
-     * session's last fetch.
+     * The one-time priming read, shared by [flagsState] and the TTL gate. Seeding the gate from
+     * disk keeps it warm across process death, exactly as it was warm from the previous session's
+     * last fetch.
      */
-    private val primed: Primed by lazy {
+    private val primed: CachedDocument by lazy {
         val snapshot = flagsCache?.readIfValid()
-        Primed(flags = snapshot?.flags ?: defaultFlags, fetchedAtMillis = snapshot?.savedAtEpochMillis ?: 0L)
+        CachedDocument(snapshot?.flags ?: defaultFlags, snapshot?.savedAtEpochMillis ?: 0L)
     }
 
     /**
@@ -219,7 +219,7 @@ class Flagsmith internal constructor(
     suspend fun clearCache() {
         val barrier = stateMutex.withLock {
             lastAppliedSeq = seqCounter
-            lastSuccessfulFetchAtMillis = 0L
+            cached = CachedDocument(defaultFlags, fetchedAtMillis = 0L)
             flagsState.value = defaultFlags
             seqCounter
         }
@@ -244,27 +244,28 @@ class Flagsmith internal constructor(
         analytics?.stop()
     }
 
-    private class Primed(val flags: List<Flag>, val fetchedAtMillis: Long)
+    private class CachedDocument(val flags: List<Flag>, val fetchedAtMillis: Long)
 
     private fun requireIdentity(): String = identity ?: error(IDENTITY_REQUIRED_MESSAGE)
 
     /**
      * The in-memory TTL gate: within [FlagsmithCacheConfig.cacheTTL] of the last successful fetch
-     * we answer from [flagsState] without touching Ktor at all. Returns `null` when the caller
-     * must go to the network.
+     * we answer from the last reusable document without touching Ktor at all. Returns `null` when
+     * the caller must go to the network.
      */
     private suspend fun cachedFlagsWithinTtl(): List<Flag>? {
         if (!cacheConfig.enableCache) return null
 
         return stateMutex.withLock {
-            val fetchedAt = fetchedAtMillisLocked()
+            val document = cachedLocked()
+            val fetchedAt = document.fetchedAtMillis
             // Deliberately a two-sided window rather than a clamped elapsed time. A device
             // whose clock was ahead stamps `fetchedAt` in the future; clamping the resulting
             // negative age to zero would make the gate hit forever, and since only a fetch
             // restamps `fetchedAt`, nothing would ever break the loop. As written, any clock
             // jump in either direction is a miss: one extra request, then it self-heals.
             val age = nowMillis() - fetchedAt
-            flagsState.value.takeIf { fetchedAt > 0L && age in 0..cacheConfig.cacheTTL.inWholeMilliseconds }
+            document.flags.takeIf { fetchedAt > 0L && age in 0..cacheConfig.cacheTTL.inWholeMilliseconds }
         }
     }
 
@@ -290,10 +291,10 @@ class Flagsmith internal constructor(
      * "have we ever fetched" rather than on the list being non-empty.
      */
     private suspend fun lastKnownFlagsOrDefaults(error: Throwable): List<Flag> {
-        val haveFetchedBefore = stateMutex.withLock { fetchedAtMillisLocked() > 0L }
+        val document = stateMutex.withLock { cachedLocked() }
 
-        return if (cacheConfig.enableCache && cacheConfig.acceptStaleCache && haveFetchedBefore) {
-            flagsState.value
+        return if (cacheConfig.enableCache && cacheConfig.acceptStaleCache && document.fetchedAtMillis > 0L) {
+            document.flags
         } else {
             defaultFlags.ifEmpty { throw error }
         }
@@ -321,7 +322,7 @@ class Flagsmith internal constructor(
                 false
             } else {
                 lastAppliedSeq = seq
-                if (cacheable) lastSuccessfulFetchAtMillis = nowMillis()
+                if (cacheable) cached = CachedDocument(flags, nowMillis())
                 flagsState.value = flags
                 true
             }
@@ -331,9 +332,8 @@ class Flagsmith internal constructor(
         }
     }
 
-    /** Call only while holding [stateMutex]. */
-    private fun fetchedAtMillisLocked(): Long =
-        lastSuccessfulFetchAtMillis ?: primed.fetchedAtMillis.also { lastSuccessfulFetchAtMillis = it }
+    /** Call only while holding [stateMutex]. Resolves the primed snapshot on first use. */
+    private fun cachedLocked(): CachedDocument = cached ?: primed.also { cached = it }
 
     private suspend fun getFeatureFlag(featureId: String) = getFeatureFlags().map { flags ->
         val foundFlag = flags.find { flag -> flag.feature.name == featureId && flag.enabled }
