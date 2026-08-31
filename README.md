@@ -3,15 +3,16 @@
 # Flagsmith Kotlin Client
 This is a fork of the original flagsmith Android client, updated to work with Kotlin multiplatform. It supports Android, iOS, and JVM platforms.
 
-## Instance-scoped identity (breaking change in 0.2.0)
+## Usage
 
-The identity is now a property of the `Flagsmith` instance instead of a per-call argument. Every
-instance reads exactly one document, always within its environment (`environmentKey` is part of
-every scope): with `identity` set, that document is the environment's flags **evaluated for that
-identity**; with `identity = null`, it is the environment's own default flags. An instance never
-mixes the two — switching identity, or also reading the environment defaults, means constructing a
-new instance (two instances sharing a `cacheDirectoryPath` don't conflict; give the pre-login one
-`enableAnalytics = false`).
+The identity is a property of the `Flagsmith` instance. Every instance reads exactly one document,
+always within its environment (`environmentKey` is part of every scope): with `identity` set, that
+document is the environment's flags **evaluated for that identity**; with `identity = null`, it is
+the environment's own default flags. An instance never mixes the two — switching identity, or also
+reading the environment defaults, means constructing a new instance (two instances sharing a
+`cacheDirectoryPath` don't conflict; give the pre-login one `enableAnalytics = false`). The
+identity-scoped methods (`getTrait(s)`, `setTrait(s)`, `getIdentity`) throw
+`IllegalStateException` on an instance created without an `identity`.
 
 ```kotlin
 val flagsmith = Flagsmith(
@@ -22,17 +23,12 @@ val flagsmith = Flagsmith(
         cacheDirectoryPath = context.cacheDir.absolutePath,
         cacheTTL = 1.hours,
         acceptStaleCache = true,
+        maxSnapshotSizeBytes = 1L * 1024 * 1024,
     )
 )
 
 flagsmith.getFeatureFlags { result -> /* ... */ }
 ```
-
-- All methods lost their `identity` parameter: `getFeatureFlags()`, `getTrait(id)`, `getTraits()`,
-  `setTrait(trait)`, `setTraits(traits)`, `getIdentity()`, `hasFeatureFlag(id)`, `getValueForFeature(id)`.
-- Identity-scoped methods (`getTrait(s)`, `setTrait(s)`, `getIdentity`) throw
-  `IllegalStateException` on an instance created without an `identity`.
-- Changing identity means creating a new instance; call `close()` on the old one.
 
 ## Flags cache (offline cold start + TTL gate)
 
@@ -48,13 +44,13 @@ small snapshot file next to the cache directory, gated by `cacheTTL` (a `kotlin.
   empty list, not as defaults. With `acceptStaleCache = false` (default), the failure falls back to
   `defaultFlags` as before.
 - `clearCache()` resets the flow to `defaultFlags`, clears the TTL clock and deletes the snapshot.
-- **`cacheTTLSeconds: Long` became `cacheTTL: Duration`, and `cacheSize` became `maxSnapshotSizeBytes`** (maximum size in bytes of a single cached snapshot; larger snapshots are skipped).
-- **`getTrait()`, `getTraits()` and `getIdentity()` are never cached** and always hit the network —
-  they are cold-path reads; call them sparingly (see the migration note above).
+- `getTrait()`, `getTraits()` and `getIdentity()` are never cached and always hit the network —
+  they are cold-path reads; call them sparingly.
+- `maxSnapshotSizeBytes` caps the size of a single cached snapshot; larger snapshots are skipped.
+- The snapshot is written on every successful flags fetch or trait update; `transient = true`
+  responses are never persisted, and `defaultFlags` never reach the flow or the snapshot.
 
-The snapshot is written on every successful flags fetch or trait update; `transient = true`
-responses are never persisted, and `defaultFlags` never reach the flow or the snapshot. Upgrading
-from 0.1.x: the old Ktor HTTP-cache directory is reclaimed automatically on the first write.
+See [CHANGELOG.md](CHANGELOG.md) for the full 0.2.0 change list and migration notes.
 
 ---------
 
