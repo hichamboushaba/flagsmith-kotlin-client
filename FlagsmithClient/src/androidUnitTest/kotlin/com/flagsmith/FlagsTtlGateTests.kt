@@ -2,6 +2,7 @@ package com.flagsmith
 
 import com.flagsmith.entities.Feature
 import com.flagsmith.entities.Flag
+import com.flagsmith.entities.FlagEvent
 import com.flagsmith.entities.Trait
 import com.flagsmith.mockResponses.MockEndpoint
 import com.flagsmith.mockResponses.MockResponses
@@ -10,6 +11,8 @@ import com.flagsmith.mockResponses.mockResponseFor
 import io.ktor.util.date.getTimeMillis
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.runBlocking
+import org.awaitility.kotlin.await
+import org.awaitility.kotlin.untilAsserted
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -325,6 +328,70 @@ class FlagsTtlGateTests {
             request().withPath("/identities/").withMethod("GET"),
             VerificationTimes.exactly(2)
         )
+    }
+
+    @Test
+    fun `g17 - a failed realtime refresh does not leave stale flags gated`() = runBlocking<Unit> {
+        val eventApi = FakeEventApiFactory()
+        val instance = testFlagsmith(
+            baseUrl,
+            identity = "person",
+            cacheConfig = gateCacheConfig(acceptStaleCache = false),
+            enableRealtimeUpdates = true,
+            eventApiFactory = eventApi
+        )
+
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        assertTrue(instance.getFeatureFlags().isSuccess)
+
+        // The event says the server changed, but the refresh it triggers fails.
+        mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
+        eventApi.api.events.emit(FlagEvent(updatedAt = 1.0))
+        await untilAsserted {
+            mockServer.verify(
+                request().withPath("/identities/").withMethod("GET"),
+                VerificationTimes.exactly(2)
+            )
+        }
+
+        // Still inside the TTL of the first fetch. The gate must not hand back the document the
+        // event already told us is superseded - it has to go to the server again.
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        val afterFailedRefresh = instance.getFeatureFlags()
+
+        assertTrue(afterFailedRefresh.isSuccess)
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("GET"),
+            VerificationTimes.exactly(3)
+        )
+
+        // ...and that successful fetch clears the stale mark, so the gate works again.
+        assertTrue(instance.getFeatureFlags().isSuccess)
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("GET"),
+            VerificationTimes.exactly(3)
+        )
+        instance.close()
+    }
+
+    @Test
+    fun `g18 - close releases the http clients`() = runBlocking<Unit> {
+        val eventApi = FakeEventApiFactory()
+        val instance = testFlagsmith(
+            baseUrl,
+            identity = "person",
+            enableRealtimeUpdates = true,
+            eventApiFactory = eventApi
+        )
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        assertTrue(instance.getFeatureFlags().isSuccess)
+
+        instance.close()
+
+        assertTrue("The event stream's client must be released too", eventApi.api.closed)
+        // The flags client is closed as well, so the instance cannot be reused.
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        assertTrue(instance.getFeatureFlags().isFailure)
     }
 
     @Test

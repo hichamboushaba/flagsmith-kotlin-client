@@ -45,6 +45,8 @@ internal class KtorFlagsmithApi(
         }
     }
 
+    override fun close() = httpClient.close()
+
     companion object : FlagsmithApi.Factory {
         private const val UPDATED_AT_HEADER = "x-flagsmith-document-updated-at"
 

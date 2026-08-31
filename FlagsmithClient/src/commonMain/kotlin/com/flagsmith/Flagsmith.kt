@@ -65,6 +65,7 @@ class Flagsmith internal constructor(
         )
     }
     private var sseUpdatesJob: Job? = null
+    private var closed = false
 
     private val flagSmithApi: FlagsmithApi
     private val analytics: FlagsmithAnalytics?
@@ -227,6 +228,7 @@ class Flagsmith internal constructor(
     }
 
     fun restartRealtimeUpdates() {
+        check(!closed) { "This Flagsmith instance has been closed" }
         if (!enableRealtimeUpdates) {
             error("Real-time updates are not enabled for this instance")
         }
@@ -237,14 +239,31 @@ class Flagsmith internal constructor(
     }
 
     /**
-     * Used to stop real-time updates and Analytics periodic updates, to restart call [restartRealtimeUpdates]
+     * Releases everything this instance owns: the real-time subscription, the analytics flush loop
+     * and the underlying HTTP clients (each of which holds an engine and a connection pool).
+     *
+     * The instance is unusable afterwards — build a new one, which is also how you switch
+     * [identity]. Stop analytics and real-time updates without discarding the instance is not
+     * supported; use [restartRealtimeUpdates] only before closing.
      */
     fun close() {
+        closed = true
         sseUpdatesJob?.cancel()
         analytics?.stop()
+        flagSmithApi.close()
+        eventService?.close()
     }
 
-    private class CachedDocument(val flags: List<Flag>, val fetchedAtMillis: Long)
+    private class CachedDocument(
+        val flags: List<Flag>,
+        val fetchedAtMillis: Long,
+        /**
+         * Set when a real-time event told us the server changed. The document stays available as
+         * an offline fallback, but must never satisfy a TTL-gated call again — otherwise a failed
+         * event-triggered refresh would suppress every retry for the rest of the TTL.
+         */
+        val knownStale: Boolean = false,
+    )
 
     private fun requireIdentity(): String = identity ?: error(IDENTITY_REQUIRED_MESSAGE)
 
@@ -265,7 +284,11 @@ class Flagsmith internal constructor(
             // restamps `fetchedAt`, nothing would ever break the loop. As written, any clock
             // jump in either direction is a miss: one extra request, then it self-heals.
             val age = nowMillis() - fetchedAt
-            document.flags.takeIf { fetchedAt > 0L && age in 0..cacheConfig.cacheTTL.inWholeMilliseconds }
+            document.flags.takeIf {
+                !document.knownStale &&
+                    fetchedAt > 0L &&
+                    age in 0..cacheConfig.cacheTTL.inWholeMilliseconds
+            }
         }
     }
 
@@ -317,23 +340,38 @@ class Flagsmith internal constructor(
      * the TTL clock and is written to the [flagsCache].
      */
     private suspend fun applyFlags(flags: List<Flag>, seq: Long, cacheable: Boolean) {
+        // Stamped once and shared with the disk write below, so the in-memory and on-disk clocks
+        // cannot drift apart by however long the write waits for its dispatcher and lock.
+        val fetchedAtMillis = nowMillis()
+
         val accepted = stateMutex.withLock {
             if (seq <= lastAppliedSeq) {
                 false
             } else {
                 lastAppliedSeq = seq
-                if (cacheable) cached = CachedDocument(flags, nowMillis())
+                if (cacheable) cached = CachedDocument(flags, fetchedAtMillis)
                 flagsState.value = flags
                 true
             }
         }
         if (accepted && cacheable) {
-            flagsCache?.write(flags, seq)
+            flagsCache?.write(flags, seq, fetchedAtMillis)
         }
     }
 
     /** Call only while holding [stateMutex]. Resolves the primed snapshot on first use. */
     private fun cachedLocked(): CachedDocument = cached ?: primed.also { cached = it }
+
+    /**
+     * Marks the cached document known-stale. The 0.1.x code deleted its HTTP cache here, which was
+     * durable: after a failed refresh every later read went back to the network. `forceRefresh`
+     * alone only skips the gate for one call, so without this a failed event-triggered refresh
+     * would leave the superseded document serving reads for the rest of its TTL.
+     */
+    private suspend fun markCachedDocumentStale() = stateMutex.withLock {
+        val document = cachedLocked()
+        cached = CachedDocument(document.flags, document.fetchedAtMillis, knownStale = true)
+    }
 
     private suspend fun getFeatureFlag(featureId: String) = getFeatureFlags().map { flags ->
         val foundFlag = flags.find { flag -> flag.feature.name == featureId && flag.enabled }
@@ -349,15 +387,15 @@ class Flagsmith internal constructor(
             if (lastEventUpdate > lastFlagFetchTime) {
                 lastFlagFetchTime = lastEventUpdate
 
-                // Now we can get the new values, which will automatically be emitted to the
-                // flagUpdateFlow. forceRefresh bypasses the TTL gate: an SSE event means the
-                // server state changed, so the cached document must not be served.
+                // The event proves what we hold is superseded, so retire it before refreshing:
+                // `forceRefresh` only bypasses the gate for this one call, and the refresh may
+                // fail. Nothing is logged on success - a stale or defaults fallback also returns
+                // a successful Result, so it would not mean we got the new values.
+                markCachedDocumentStale()
                 getFeatureFlags(forceRefresh = true) { res ->
                     if (res.isFailure) {
                         // TODO: provide a logging mechanism
                         println("Error getting flags in SSE stream: ${res.exceptionOrNull()}")
-                    } else {
-                        println("Got flags due to SSE event: $event")
                     }
                 }
             }

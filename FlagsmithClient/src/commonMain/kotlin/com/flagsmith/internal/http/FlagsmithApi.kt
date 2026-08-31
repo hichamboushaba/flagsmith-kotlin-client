@@ -18,6 +18,9 @@ internal interface FlagsmithApi {
 
     suspend fun postAnalytics(eventMap: Map<String, Int?>) : Result<Unit>
 
+    /** Releases the underlying HTTP client. The instance is unusable afterwards. */
+    fun close()
+
     interface Factory {
         fun create(
             baseUrl: String,

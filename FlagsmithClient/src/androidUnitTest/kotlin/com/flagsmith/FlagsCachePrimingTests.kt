@@ -147,8 +147,28 @@ class FlagsCachePrimingTests {
         val result = runBlocking { offlineInstance.getFeatureFlagsSync() }
         assertTrue(result.isSuccess)
         assertEquals("default", result.getOrThrow().first().featureStateValue)
+    }
 
-        assertNull("Defaults must never overwrite anything in the flow", offlineInstance.flagUpdateFlow.value.withValueFlag())
+    @Test
+    fun testDefaultsFallbackDoesNotOverwriteAPrimedFlow() {
+        populateSnapshot()
+        mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
+
+        // The snapshot is still within its TTL, so the flow primes with the server flags. Force
+        // past the gate so the fetch is actually attempted, and fail it with stale-serve off:
+        // the caller gets defaultFlags while the flow must keep the primed document.
+        val instance = flagsmith(defaultFlags = defaultFlags, acceptStaleCache = false)
+        assertEquals(756.0, instance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
+
+        val result = runBlocking { instance.getFeatureFlags(forceRefresh = true) }
+
+        assertTrue(result.isSuccess)
+        assertEquals("default", result.getOrThrow().first().featureStateValue)
+        assertEquals(
+            "A defaults fallback must not overwrite the flags already in the flow",
+            756.0,
+            instance.flagUpdateFlow.value.withValueFlag()?.featureStateValue
+        )
     }
 
     @Test

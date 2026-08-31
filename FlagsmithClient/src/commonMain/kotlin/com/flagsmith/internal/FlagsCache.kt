@@ -98,11 +98,11 @@ internal class FlagsCache(
      * Persists [flags] for the operation identified by [seq]. Out-of-order or superseded writes
      * (older than the newest one already handled) are dropped. Never throws.
      */
-    suspend fun write(flags: List<Flag>, seq: Long): Unit = withContext(Dispatchers.IO) {
+    suspend fun write(flags: List<Flag>, seq: Long, fetchedAtMillis: Long): Unit = withContext(Dispatchers.IO) {
         ioMutex.withLock {
             if (seq > lastWrittenSeq) {
                 lastWrittenSeq = seq
-                runCatching { writeSnapshot(flags) }
+                runCatching { writeSnapshot(flags, fetchedAtMillis) }
             }
         }
         deleteLegacyHttpCacheOnce()
@@ -116,7 +116,12 @@ internal class FlagsCache(
      */
     suspend fun clear(barrierSeq: Long): Unit = withContext(Dispatchers.IO) {
         ioMutex.withLock {
-            lastWrittenSeq = maxOf(lastWrittenSeq, barrierSeq)
+            // A write with a higher sequence was requested after this clear, so it supersedes it.
+            // `clearCache()` releases its state lock before dispatching here, which leaves room
+            // for that write to land first; deleting anyway would discard a newer snapshot.
+            if (barrierSeq < lastWrittenSeq) return@withLock
+
+            lastWrittenSeq = barrierSeq
             runCatching { fileSystem.delete(file, mustExist = false) }
             runCatching { fileSystem.delete(tmpFile, mustExist = false) }
         }
@@ -128,9 +133,9 @@ internal class FlagsCache(
         return json.decodeFromString<CachedFlags>(fileSystem.source(file).buffer().use { it.readUtf8() })
     }
 
-    private fun writeSnapshot(flags: List<Flag>) {
+    private fun writeSnapshot(flags: List<Flag>, fetchedAtMillis: Long) {
         val encoded = json.encodeToString(
-            CachedFlags(scopeHash = scopeHash, savedAtEpochMillis = nowMillis(), flags = flags)
+            CachedFlags(scopeHash = scopeHash, savedAtEpochMillis = fetchedAtMillis, flags = flags)
         ).encodeUtf8()
         // Checked before writing so an oversized document leaves the previous snapshot intact
         // instead of replacing it with a file that readIfValid would reject anyway.

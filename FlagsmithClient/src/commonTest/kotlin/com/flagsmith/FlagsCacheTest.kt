@@ -49,6 +49,9 @@ class FlagsCacheTest {
         nowMillis = nowMillis
     )
 
+    /** Defaults the fetch timestamp to the fixed test clock; a few tests pass their own. */
+    private suspend fun FlagsCache.write(flags: List<Flag>, seq: Long) = write(flags, seq, now)
+
     private fun flag(name: String, value: Any?) = Flag(
         feature = Feature(id = 1L, name = name, type = "STANDARD"),
         enabled = true,
@@ -73,8 +76,8 @@ class FlagsCacheTest {
         val loaded = s.readIfValid()
         assertNotNull(loaded)
         assertEquals(sampleFlags, loaded.flags)
-        // The snapshot timestamp must round-trip in the same unit the TTL gate uses, so the gate
-        // can be seeded after process death without losing sub-second precision.
+        // The timestamp on disk is the one the caller recorded in memory, not one re-read from
+        // the clock inside the write, so the two cannot drift apart.
         assertEquals(now, loaded.savedAtEpochMillis)
     }
 
@@ -246,7 +249,7 @@ class FlagsCacheTest {
     }
 
     @Test
-    fun aSecondCacheForTheSameScopeCannotEmptyTheSnapshot() = runTest {
+    fun writeStillLandsWhenTheTempFileDisappearsMidMove() = runTest {
         // A second FlagsCache for the same scope resolves to the same paths, so it can consume the
         // shared temp file before this one moves it. The write must still land a complete
         // document rather than truncating the snapshot to nothing.
@@ -262,6 +265,30 @@ class FlagsCacheTest {
         s.write(sampleFlags, seq = 1)
 
         assertEquals(sampleFlags, s.readIfValid()?.flags)
+    }
+
+    @Test
+    fun clearDoesNotDeleteASnapshotWrittenAfterItWasRequested() = runTest {
+        val fs = FakeFileSystem()
+        val s = store(fs)
+
+        // `clearCache()` captures its barrier and releases the state lock before dispatching the
+        // delete, so an operation starting after it can land its snapshot first. That write is
+        // legitimately newer and must survive the pending clear.
+        s.write(sampleFlags, seq = 2)
+        s.clear(barrierSeq = 1)
+
+        assertEquals(sampleFlags, s.readIfValid()?.flags)
+    }
+
+    @Test
+    fun writeRecordsTheCallersFetchTimestamp() = runTest {
+        val fs = FakeFileSystem()
+        val s = store(fs, nowMillis = { now + 5_000 })
+
+        s.write(sampleFlags, seq = 1, fetchedAtMillis = now)
+
+        assertEquals(now, s.readIfValid()?.savedAtEpochMillis)
     }
 
     @Test

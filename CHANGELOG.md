@@ -47,6 +47,10 @@ All notable changes to this project are documented in this file. The format is b
   `Cache-Control` request logic). The flags cache and its TTL gate replace it; `forceRefresh` now
   means exactly "bypass the TTL gate". 0.1.x installations' `flagsmith/` cache directory is
   reclaimed automatically on the first write.
+- **`identity` is the second parameter of the `Flagsmith` factories**, before `baseUrl`. Positional
+  calls therefore change meaning silently rather than failing to compile: `Flagsmith("key", "https://self-hosted/api/v1/")`
+  now reads that URL as an identity and falls back to the default endpoint. Use named arguments.
+
 - **Caching for `getTrait()`, `getTraits()` and `getIdentity()`.** These reads hit the same
   `identities/` URL as `getFeatureFlags()`, so they were previously served from the HTTP cache
   within the TTL; they are now unconditional network calls (they are cold-path reads, and caching

@@ -16,4 +16,6 @@ internal class FlagsmithEventService(
     )
 
     val sseEventsFlow = flagsmithEventApi.observeEvents()
+
+    fun close() = flagsmithEventApi.close()
 }
