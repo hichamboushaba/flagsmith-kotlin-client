@@ -25,13 +25,13 @@ import java.io.File
 
 private const val GATE_CACHE_DIR = "cache-ttl-gate"
 
+/** How far past the 3600s TTL the injected clock is moved when a test needs a gate miss. */
 private const val PAST_TTL_OFFSET_MILLIS = 4_000_000L
 
 /**
- * Tests the in-memory TTL gate: within [FlagsmithCacheConfig.cacheTTL] of the last
- * successful fetch, `getFeatureFlags` must answer from memory without issuing an HTTP request.
- * Request counts are pinned with MockServer's VerificationTimes.exactly.
- *
+ * Tests the in-memory TTL gate: within [FlagsmithCacheConfig.cacheTTL] of the last successful
+ * fetch, `getFeatureFlags` must answer from memory without issuing an HTTP request. Request counts
+ * are pinned with MockServer's VerificationTimes.exactly.
  */
 class FlagsTtlGateTests {
 

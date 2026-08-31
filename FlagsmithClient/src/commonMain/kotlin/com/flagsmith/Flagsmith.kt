@@ -1,10 +1,10 @@
 package com.flagsmith
 
 import com.flagsmith.entities.*
+import com.flagsmith.internal.FlagsCache
 import com.flagsmith.internal.FlagsmithAnalytics
 import com.flagsmith.internal.FlagsmithEventService
 import com.flagsmith.internal.FlagsmithEventTimeTracker
-import com.flagsmith.internal.FlagsCache
 import com.flagsmith.internal.http.FlagsmithApi
 import com.flagsmith.internal.http.FlagsmithEventApi
 import io.ktor.util.date.getTimeMillis
@@ -52,7 +52,7 @@ class Flagsmith internal constructor(
     flagsmithApiFactory: FlagsmithApi.Factory,
     flagsmithEventApiFactory: FlagsmithEventApi.Factory?,
     flagsmithAnalyticsFactory: FlagsmithAnalytics.Factory?,
-    internal val nowMillis: () -> Long = ::getTimeMillis,
+    private val nowMillis: () -> Long = ::getTimeMillis,
 ) : FlagsmithEventTimeTracker {
     private val eventService: FlagsmithEventService? = if (!enableRealtimeUpdates || flagsmithEventApiFactory == null) {
         null
@@ -69,23 +69,59 @@ class Flagsmith internal constructor(
     private val flagSmithApi: FlagsmithApi
     private val analytics: FlagsmithAnalytics?
 
+    /**
+     * Persists the flags most recently emitted to [flagUpdateFlow] so they survive a cold start.
+     * `null` when caching is disabled.
+     */
+    private val flagsCache: FlagsCache?
+
     // The last time we got an event from the SSE stream or via the API
     private var lastEventUpdate: Double = 0.0
 
+    // Guards [seqCounter], [lastAppliedSeq], [lastSuccessfulFetchAtMillis] and the [flagsState]
+    // write. Never held across IO.
+    private val stateMutex = Mutex()
+    private var seqCounter = 0L
+    private var lastAppliedSeq = 0L
+
+    // Local fetch clock for the TTL gate: when we last applied a successful flag document.
+    // Three states: null = not yet resolved (falls back to the primed snapshot time),
+    // 0L = known-none (cleared), >0 = known. Never use [lastFlagFetchTime] here — that is the
+    // server's document timestamp and belongs to the SSE stream.
+    private var lastSuccessfulFetchAtMillis: Long? = null
+
     /**
-     * Stores the flags most recently emitted to [flagUpdateFlow] so they can survive a cold start.
-     * `null` when caching is disabled.
+     * The one-time priming read, shared by [flagsState] and the TTL gate: the flags to start from,
+     * and the instant they were fetched at (`0L` when there was no valid snapshot). Seeding the
+     * gate from disk keeps it warm across process death, exactly as it was warm from the previous
+     * session's last fetch.
      */
+    private val primed: Primed by lazy {
+        val snapshot = flagsCache?.readIfValid()
+        Primed(
+            flags = snapshot?.flags ?: defaultFlags,
+            fetchedAtMillis = snapshot?.savedAtEpochSeconds?.times(1000) ?: 0L
+        )
+    }
+
+    /**
+     * Backing state of [flagUpdateFlow]. `by lazy` guarantees the priming read happens exactly
+     * once, happens-before any observer, and before any write that goes through [flagsState].
+     */
+    private val flagsState: MutableStateFlow<List<Flag>> by lazy { MutableStateFlow(primed.flags) }
+
+    /** The most recently known flags: primed from disk on first access, then updated by every successful fetch. */
+    val flagUpdateFlow: StateFlow<List<Flag>> get() = flagsState
+
     init {
-        // Declared before the store property so the guard runs before `cacheDirectoryPath` is
-        // consumed by its initialiser.
         require(!cacheConfig.enableCache || cacheConfig.cacheDirectoryPath.isNotEmpty()) {
             "Cache directory path must be provided when cache is enabled"
         }
-    }
+        if (enableRealtimeUpdates && flagsmithEventApiFactory == null) {
+            error("Real-time updates are enabled but no event API factory was provided")
+        }
 
-    private val flagsCache: FlagsCache? =
-        if (cacheConfig.enableCache) {
+        flagsCache = if (cacheConfig.enableCache) {
             FlagsCache(
                 baseDirectory = cacheConfig.cacheDirectoryPath.toPath(),
                 scope = FlagsCache.Scope(baseUrl, environmentKey, identity),
@@ -95,77 +131,6 @@ class Flagsmith internal constructor(
                 nowMillis = nowMillis,
             )
         } else null
-
-    /**
-     * Result of the one-time priming read: the flags that [flagsState] starts with, and the
-     * timestamp (epoch millis) the snapshot was written at — `0L` when there was no valid
-     * snapshot. Used to seed [lastSuccessfulFetchAtMillis] so the TTL gate is warm after process
-     * death, exactly as it was warm from the previous session's last fetch.
-     */
-    private class Primed(val flags: List<Flag>, val fetchedAtMillis: Long)
-
-    private val primed: Primed by lazy {
-        flagsCache?.readIfValid()
-            .let { Primed(it?.flags ?: defaultFlags, it?.savedAtEpochSeconds?.times(1000) ?: 0L) }
-    }
-
-    /**
-     * Backing state of [flagUpdateFlow]. Primed lazily on first access: either from the
-     * last-known-flags snapshot or, when there is none, from [defaultFlags]. `by lazy` guarantees
-     * the priming read happens exactly once, happens-before any observer, and before any write
-     * that goes through [flagsState].
-     */
-    private val flagsState: MutableStateFlow<List<Flag>> by lazy {
-        MutableStateFlow(primed.flags)
-    }
-
-    /** The most recently known flags: primed from disk on first access, then updated by every successful fetch. */
-    val flagUpdateFlow: StateFlow<List<Flag>> get() = flagsState
-
-    // Guards [seqCounter], [lastAppliedSeq], [lastSuccessfulFetchAtMillis] and the [flagsState]
-    // write. Never held across IO.
-    private val stateMutex = Mutex()
-    private var seqCounter = 0L // guarded by stateMutex
-    private var lastAppliedSeq = 0L // guarded by stateMutex
-
-    // Local fetch clock for the TTL gate: when we last applied a successful flag document.
-    // Three states: null = not yet resolved (falls back to the primed snapshot time),
-    // 0L = known-none (cleared), >0 = known. Never use [lastFlagFetchTime] here — that is the
-    // server's document timestamp and keeps SSE state.
-    private var lastSuccessfulFetchAtMillis: Long? = null // guarded by stateMutex
-
-    /** Call only while holding [stateMutex]. */
-    private fun fetchedAtMillisLocked(): Long =
-        lastSuccessfulFetchAtMillis ?: primed.fetchedAtMillis.also { lastSuccessfulFetchAtMillis = it }
-
-    /** Allocates the ordering token for a flag-producing operation. Called at operation entry. */
-    private suspend fun beginOperation(): Long = stateMutex.withLock { ++seqCounter }
-
-    /**
-     * Applies [flags] to [flagsState] unless a newer operation has already applied (or
-     * [clearCache] has invalidated everything up to the current sequence). On success and when
-     * [persist] is set, the flags are also written to the last-known-flags store.
-     */
-    private suspend fun applyFlags(flags: List<Flag>, seq: Long, persist: Boolean) {
-        val accepted = stateMutex.withLock {
-            if (seq <= lastAppliedSeq) {
-                false
-            } else {
-                lastAppliedSeq = seq
-                lastSuccessfulFetchAtMillis = nowMillis()
-                flagsState.value = flags
-                true
-            }
-        }
-        if (accepted && persist) {
-            flagsCache?.write(flags, seq)
-        }
-    }
-
-    init {
-        if (enableRealtimeUpdates && flagsmithEventApiFactory == null) {
-            error("Real-time updates are enabled but no event API factory was provided")
-        }
 
         flagSmithApi = flagsmithApiFactory.create(
             baseUrl = baseUrl,
@@ -195,110 +160,52 @@ class Flagsmith internal constructor(
         transient: Boolean = false,
         forceRefresh: Boolean = false
     ): Result<List<Flag>> {
-        // In-memory TTL gate: within [FlagsmithCacheConfig.cacheTTL] of the last successful
-        // fetch, answer from [flagsState] without touching Ktor at all. The exclusions are
-        // load-bearing: `traits != null` is a POST (a write), `transient = true` is a distinct
-        // server-side semantic that must never be served from persisted state, and
-        // `enableCache = false` must keep meaning "always fetch".
-        if (cacheConfig.enableCache && !forceRefresh && traits == null && !transient) {
-            stateMutex.withLock {
-                val fetchedAt = fetchedAtMillisLocked()
-                val age = nowMillis() - fetchedAt
-                if (fetchedAt > 0L && age in 0..cacheConfig.cacheTTL.inWholeMilliseconds) {
-                    flagsState.value
-                } else {
-                    null
-                }
-            }?.let { return Result.success(it) }
+        if (!forceRefresh && traits == null && !transient) {
+            cachedFlagsWithinTtl()?.let { return Result.success(it) }
         }
 
         val seq = beginOperation()
+        val result = fetchFlags(traits, transient)
 
-        val result = if (identity != null) {
-            if (traits != null) {
-                flagSmithApi.postTraits(IdentityAndTraits(identity, traits, transient))
-                    .map { it.flags }
-            } else {
-                // Pass transient flag only if it's true
-                // TODO: revisit this when https://github.com/Flagsmith/flagsmith/issues/5260 is resolved
-                flagSmithApi.getIdentityFlagsAndTraits(identity, transient.takeIf { it })
-                    .map { it.flags }
-            }
-        } else {
-            if (traits != null) {
-                // Only reachable in environment mode - see [requireIdentity].
-                error(IDENTITY_REQUIRED_MESSAGE)
-            } else {
-                flagSmithApi.getFlags()
-            }
-        }
-
-        // Emit and persist BEFORE falling back: a defaults fallback must never
-        // overwrite the last-known flags in the flow, nor reach the disk snapshot.
+        // Emit and persist BEFORE falling back: a defaults fallback must never overwrite the
+        // last-known flags in the flow, nor reach the disk snapshot.
         if (result.isSuccess) {
             applyFlags(result.getOrThrow(), seq, persist = !transient)
         }
 
-        return result.recoverCatching { error ->
-            val known = stateMutex.withLock { fetchedAtMillisLocked() > 0L }
-            if (cacheConfig.acceptStaleCache && known) {
-                // Serve the last-known document, even when it is legitimately empty.
-                flagsState.value
-            } else {
-                defaultFlags.ifEmpty { throw error }
-            }
-        }
+        return result.recoverCatching { error -> lastKnownFlagsOrDefaults(error) }
     }
 
-    suspend fun hasFeatureFlag(
-        featureId: String
-    ): Result<Boolean> {
-        return getFeatureFlag(featureId).map { flag -> flag != null }
-    }
+    suspend fun hasFeatureFlag(featureId: String): Result<Boolean> =
+        getFeatureFlag(featureId).map { flag -> flag != null }
 
-    suspend fun getValueForFeature(
-        featureId: String
-    ) = getFeatureFlag(featureId).map { flag -> flag?.featureStateValue }
+    suspend fun getValueForFeature(featureId: String): Result<Any?> =
+        getFeatureFlag(featureId).map { flag -> flag?.featureStateValue }
 
-    suspend fun getTrait(id: String): Result<Trait?> {
-        return flagSmithApi.getIdentityFlagsAndTraits(requireIdentity())
-            .map { value -> value.traits.find { it.key == id } }
-    }
+    suspend fun getTrait(id: String): Result<Trait?> =
+        getTraits().map { traits -> traits.find { it.key == id } }
 
-    suspend fun getTraits(): Result<List<Trait>> {
-        return flagSmithApi.getIdentityFlagsAndTraits(requireIdentity())
-            .map { value -> value.traits }
-    }
+    suspend fun getTraits(): Result<List<Trait>> =
+        flagSmithApi.getIdentityFlagsAndTraits(requireIdentity()).map { it.traits }
 
-    suspend fun setTrait(trait: Trait): Result<TraitWithIdentity> {
-        val id = requireIdentity()
-        val seq = beginOperation()
-        val result = flagSmithApi.postTraits(IdentityAndTraits(id, listOf(trait)))
-        if (result.isSuccess) {
-            applyFlags(result.getOrThrow().flags, seq, persist = true)
-        }
-        return result.map { response ->
-            TraitWithIdentity(
-                key = response.traits.first().key,
-                traitValue = response.traits.first().traitValue,
-                identity = Identity(id)
-            )
-        }
-    }
+    suspend fun setTrait(trait: Trait): Result<TraitWithIdentity> =
+        setTraits(listOf(trait)).map { it.first() }
 
     suspend fun setTraits(traits: List<Trait>): Result<List<TraitWithIdentity>> {
-        val id = requireIdentity()
+        val identity = requireIdentity()
         val seq = beginOperation()
-        val result = flagSmithApi.postTraits(IdentityAndTraits(id, traits))
+        val result = flagSmithApi.postTraits(IdentityAndTraits(identity, traits))
+
         if (result.isSuccess) {
             applyFlags(result.getOrThrow().flags, seq, persist = true)
         }
+
         return result.map { response ->
             response.traits.map { trait ->
                 TraitWithIdentity(
                     key = trait.key,
                     traitValue = trait.traitValue,
-                    identity = Identity(id)
+                    identity = Identity(identity)
                 )
             }
         }
@@ -307,22 +214,19 @@ class Flagsmith internal constructor(
     suspend fun getIdentity(transient: Boolean = false): Result<IdentityFlagsAndTraits> =
         flagSmithApi.getIdentityFlagsAndTraits(requireIdentity(), transient)
 
+    /**
+     * Forgets everything this instance knows: the cached document on disk, the in-memory flags
+     * (reset to the configured defaults) and the TTL gate, so the next call hits the network.
+     * Flag requests already in flight are discarded.
+     */
     suspend fun clearCache() {
-        // Barrier: anything started before this call is superseded and can neither reach the flow
-        // nor the disk snapshot afterwards. The flow and the TTL clock are reset too: once
-        // stale-serve reads [flagsState], leaving it populated would mean "clear the cache"
-        // doesn't clear.
         val barrier = stateMutex.withLock {
             lastAppliedSeq = seqCounter
             lastSuccessfulFetchAtMillis = 0L
             flagsState.value = defaultFlags
             seqCounter
         }
-        try {
-            flagsCache?.clear(barrier)
-        } catch (e: Exception) {
-            println("Error clearing last-known flags, ${e.stackTraceToString()}")
-        }
+        flagsCache?.clear(barrier)
     }
 
     fun restartRealtimeUpdates() {
@@ -343,11 +247,85 @@ class Flagsmith internal constructor(
         analytics?.stop()
     }
 
+    private class Primed(val flags: List<Flag>, val fetchedAtMillis: Long)
+
     private fun requireIdentity(): String = identity ?: error(IDENTITY_REQUIRED_MESSAGE)
 
-    private suspend fun getFeatureFlag(
-        featureId: String,
-    ) = getFeatureFlags().map { flags ->
+    /**
+     * The in-memory TTL gate: within [FlagsmithCacheConfig.cacheTTL] of the last successful fetch
+     * we answer from [flagsState] without touching Ktor at all. Returns `null` when the caller
+     * must go to the network.
+     */
+    private suspend fun cachedFlagsWithinTtl(): List<Flag>? {
+        if (!cacheConfig.enableCache) return null
+
+        return stateMutex.withLock {
+            val fetchedAt = fetchedAtMillisLocked()
+            val age = nowMillis() - fetchedAt
+            flagsState.value.takeIf { fetchedAt > 0L && age in 0..cacheConfig.cacheTTL.inWholeMilliseconds }
+        }
+    }
+
+    private suspend fun fetchFlags(traits: List<Trait>?, transient: Boolean): Result<List<Flag>> {
+        if (identity == null) {
+            // Traits belong to an identity, so this combination is a programming error.
+            if (traits != null) error(IDENTITY_REQUIRED_MESSAGE)
+            return flagSmithApi.getFlags()
+        }
+
+        return if (traits != null) {
+            flagSmithApi.postTraits(IdentityAndTraits(identity, traits, transient)).map { it.flags }
+        } else {
+            // Pass transient flag only if it's true
+            // TODO: revisit this when https://github.com/Flagsmith/flagsmith/issues/5260 is resolved
+            flagSmithApi.getIdentityFlagsAndTraits(identity, transient.takeIf { it }).map { it.flags }
+        }
+    }
+
+    /**
+     * Fallback for a failed fetch. With [FlagsmithCacheConfig.acceptStaleCache] we serve the
+     * last-known document — including when it is legitimately empty, which is why the check is on
+     * "have we ever fetched" rather than on the list being non-empty.
+     */
+    private suspend fun lastKnownFlagsOrDefaults(error: Throwable): List<Flag> {
+        val haveFetchedBefore = stateMutex.withLock { fetchedAtMillisLocked() > 0L }
+
+        return if (cacheConfig.acceptStaleCache && haveFetchedBefore) {
+            flagsState.value
+        } else {
+            defaultFlags.ifEmpty { throw error }
+        }
+    }
+
+    /** Allocates the ordering token for a flag-producing operation. Called at operation entry. */
+    private suspend fun beginOperation(): Long = stateMutex.withLock { ++seqCounter }
+
+    /**
+     * Applies [flags] to [flagsState] unless a newer operation has already applied (or [clearCache]
+     * has invalidated everything up to the current sequence). When accepted and [persist] is set,
+     * the flags are also written to the [flagsCache].
+     */
+    private suspend fun applyFlags(flags: List<Flag>, seq: Long, persist: Boolean) {
+        val accepted = stateMutex.withLock {
+            if (seq <= lastAppliedSeq) {
+                false
+            } else {
+                lastAppliedSeq = seq
+                lastSuccessfulFetchAtMillis = nowMillis()
+                flagsState.value = flags
+                true
+            }
+        }
+        if (accepted && persist) {
+            flagsCache?.write(flags, seq)
+        }
+    }
+
+    /** Call only while holding [stateMutex]. */
+    private fun fetchedAtMillisLocked(): Long =
+        lastSuccessfulFetchAtMillis ?: primed.fetchedAtMillis.also { lastSuccessfulFetchAtMillis = it }
+
+    private suspend fun getFeatureFlag(featureId: String) = getFeatureFlags().map { flags ->
         val foundFlag = flags.find { flag -> flag.feature.name == featureId && flag.enabled }
         analytics?.trackEvent(featureId)
         foundFlag

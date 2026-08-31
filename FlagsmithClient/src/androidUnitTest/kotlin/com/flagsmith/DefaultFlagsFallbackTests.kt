@@ -44,7 +44,6 @@ class DefaultFlagsFallbackTests {
     private lateinit var mockServer: ClientAndServer
     private lateinit var flagsmithWithCache: Flagsmith
     private lateinit var flagsmithWithCacheIdentity: Flagsmith
-    private lateinit var flagsmithNoCache: Flagsmith
 
     @Mock
     private lateinit var mockApplicationContext: Context
@@ -108,14 +107,6 @@ class DefaultFlagsFallbackTests {
                 enableCache = true,
                 cacheDirectoryPath = CACHE_DIR
             )
-        )
-
-        flagsmithNoCache = Flagsmith(
-            environmentKey = "",
-            baseUrl = "http://localhost:${mockServer.localPort}",
-            enableAnalytics = false,
-            cacheConfig = FlagsmithCacheConfig(enableCache = false),
-            defaultFlags = defaultFlags
         )
     }
 

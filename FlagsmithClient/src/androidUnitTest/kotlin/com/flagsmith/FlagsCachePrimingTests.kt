@@ -22,7 +22,7 @@ import org.mockserver.integration.ClientAndServer
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
-private const val FLAGS_CACHE_DIR = "cache-last-known"
+private const val FLAGS_CACHE_DIR = "cache-priming"
 
 /** How far past the 3600s TTL the injected clock is moved when a test needs a gate miss. */
 private const val PAST_TTL_OFFSET_MILLIS = 4_000_000L
@@ -87,13 +87,9 @@ class FlagsCachePrimingTests {
     @Test
     fun testFlagUpdateFlowIsPopulatedBeforeDelayedResponseArrives() {
         populateSnapshot()
-        // Remove the Ktor HTTP cache AND run the fresh instance on a clock past the TTL, so its
-        // request genuinely reaches the delayed mock: it can only succeed after the client's 4s
-        // timeout, and the synchronous value below can only come from the snapshot.
-        File("$FLAGS_CACHE_DIR/flagsmith").deleteRecursively()
-
-        // The next response is delayed well beyond the client's 4s timeout, so it can never have
-        // arrived by the time we do the synchronous assertion below.
+        // The response is delayed well beyond the client's 4s timeout, and the fresh instance
+        // runs on a clock past the TTL so the gate cannot answer either. The value read
+        // synchronously below can therefore only have come from the snapshot.
         mockServer.mockDelayFor(MockEndpoint.GET_IDENTITIES)
 
         val freshInstance = flagsmith(nowMillis = { getTimeMillis() + PAST_TTL_OFFSET_MILLIS })
@@ -109,10 +105,6 @@ class FlagsCachePrimingTests {
     @Test
     fun testStaleServeKeepsSnapshotWhenOffline() {
         populateSnapshot()
-        // Remove ONLY the Ktor HTTP cache directory, leaving the last-known-flags snapshot (its
-        // sibling) intact - otherwise the still-valid HTTP cache would serve the request and the
-        // fetch would never fail.
-        File("$FLAGS_CACHE_DIR/flagsmith").deleteRecursively()
         mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
 
         // Clock past the TTL so the gate misses and the fetch is genuinely attempted; with
@@ -139,7 +131,6 @@ class FlagsCachePrimingTests {
     @Test
     fun testOfflineWithoutStaleAcceptFallsBackToDefaults() {
         populateSnapshot()
-        File("$FLAGS_CACHE_DIR/flagsmith").deleteRecursively()
         mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
 
         // With acceptStaleCache = false the expired snapshot is rejected at prime time, so the
@@ -213,11 +204,8 @@ class FlagsCachePrimingTests {
     @Test
     fun testDefaultsFallbackDoesNotOverwriteSnapshotOnDisk() {
         populateSnapshot()
-        // Remove the Ktor HTTP cache so the next fetch genuinely fails (see
-        // testStaleServeKeepsSnapshotWhenOffline) and the defaults fallback is exercised: the
-        // failing instance runs past TTL with acceptStaleCache = false so stale-serve cannot
-        // short-circuit the path this test exists to cover.
-        File("$FLAGS_CACHE_DIR/flagsmith").deleteRecursively()
+        // The failing instance runs past the TTL with acceptStaleCache = false, so neither the
+        // gate nor stale-serve can short-circuit the defaults path this test exists to cover.
         mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
 
         val failingInstance = flagsmith(

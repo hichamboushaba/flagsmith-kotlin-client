@@ -33,12 +33,10 @@ internal class KtorFlagsmithApi(
         httpClient.get("flags/").body()
     }
 
-    override suspend fun postTraits(identity: IdentityAndTraits): Result<IdentityFlagsAndTraits> {
-        return runCatching {
-            httpClient.post("identities/") {
-                setBody(identity)
-            }.body()
-        }
+    override suspend fun postTraits(identity: IdentityAndTraits): Result<IdentityFlagsAndTraits> = runCatching {
+        httpClient.post("identities/") {
+            setBody(identity)
+        }.body()
     }
 
     override suspend fun postAnalytics(eventMap: Map<String, Int?>): Result<Unit> = runCatching {

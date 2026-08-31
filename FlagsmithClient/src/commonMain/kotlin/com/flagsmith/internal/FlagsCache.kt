@@ -8,10 +8,10 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import okio.*
 import okio.ByteString.Companion.encodeUtf8
 import kotlin.time.Duration
@@ -26,37 +26,38 @@ private const val FORMAT_VERSION = 1
  * Persists the flags most recently emitted to [com.flagsmith.Flagsmith.flagUpdateFlow] so they can
  * be primed back into the flow on the next cold start, before any network call.
  *
- * One file per [Scope] (base url + environment key + identity), stored in a sibling directory of
- * the Ktor HTTP cache so that HTTP-cache invalidation and trimming never touch it. Writes go to a
- * temp file followed by an atomic rename, which makes the (non-suspending, lock-free) priming read
- * safe against concurrent writes: a reader observes either the complete old file or the complete
- * new one.
+ * One file per [Scope] (base url + environment key + identity). Writes go to a temp file followed
+ * by an atomic rename, which is what makes [readIfValid] safe to call without a lock: a reader
+ * observes either the complete old file or the complete new one, never a torn one.
  */
 internal class FlagsCache(
-    baseDirectory: Path,
+    private val baseDirectory: Path,
     scope: Scope,
     private val ttl: Duration,
     private val acceptStale: Boolean,
     private val maxFileBytes: Long = DEFAULT_MAX_FILE_BYTES,
     private val maxFiles: Int = DEFAULT_MAX_FILES,
-    private val json: kotlinx.serialization.json.Json = defaultJson,
+    private val json: Json = defaultJson,
     private val fileSystem: FileSystem = FileSystem.SYSTEM,
     private val nowMillis: () -> Long = ::getTimeMillis,
 ) {
     internal data class Scope(val baseUrl: String, val environmentKey: String, val identity: String?)
 
+    /** A valid cached document: the flags plus the instant they were fetched at. */
+    internal data class Snapshot(val flags: List<Flag>, val savedAtEpochSeconds: Long)
+
+    /** On-disk format. Private: nothing outside this class should depend on it. */
     @Serializable
     private data class CachedFlags(
         val version: Int = FORMAT_VERSION,
         val scopeHash: String,
-        @SerialName("saved_at_epoch_seconds") val savedAtEpochSeconds: Long,
+        val savedAtEpochSeconds: Long,
         val flags: List<Flag>
     )
 
     internal val scopeHash: String =
         "${scope.baseUrl}|${scope.environmentKey}|${scope.identity ?: ""}".encodeUtf8().sha256().hex()
 
-    private val baseDirectory: Path = baseDirectory
     private val directory: Path = baseDirectory / DIR_NAME
 
     // Exposed for tests only.
@@ -66,66 +67,39 @@ internal class FlagsCache(
     private var lastWrittenSeq = 0L // guarded by ioMutex
     private var legacyHttpCacheCleaned = false // guarded by ioMutex
 
-    internal data class Snapshot(val flags: List<Flag>, val savedAtEpochSeconds: Long)
-
     /**
-     * Reads the last-known flags if a valid, in-policy snapshot exists.
+     * Returns the cached flags if a valid, in-policy snapshot exists, otherwise `null`.
      *
-     * Non-suspending and lock-free: it is called on the caller's thread the first time
-     * `flagUpdateFlow` is accessed. Safe against concurrent writes because writes replace the file
-     * atomically. Any failure (missing file, oversized file, parse error, unknown format version,
-     * scope mismatch, expired snapshot) returns `null` and never throws.
+     * Non-suspending and lock-free: it runs on the caller's thread the first time `flagUpdateFlow`
+     * is accessed. Never throws — a missing, oversized, corrupt, foreign or expired file is simply
+     * "no snapshot".
      */
-    fun readIfValid(): Snapshot? = runCatching {
-        if (!fileSystem.exists(file)) return null
-        if ((fileSystem.metadata(file).size ?: 0L) > maxFileBytes) return null
+    fun readIfValid(): Snapshot? {
+        val cached = runCatching { readCachedFlags() }.getOrNull() ?: return null
+        if (cached.version != FORMAT_VERSION || cached.scopeHash != scopeHash) return null
 
-        val snapshot = json.decodeFromString<CachedFlags>(
-            fileSystem.source(file).buffer().use { it.readUtf8() }
-        )
-        if (snapshot.version != FORMAT_VERSION || snapshot.scopeHash != scopeHash) return null
-
-        val ageSeconds = ((nowMillis() / 1000) - snapshot.savedAtEpochSeconds).coerceAtLeast(0)
+        val ageSeconds = ((nowMillis() / 1000) - cached.savedAtEpochSeconds).coerceAtLeast(0)
         if (!acceptStale && ageSeconds > ttl.inWholeSeconds) return null
 
-        Snapshot(snapshot.flags, snapshot.savedAtEpochSeconds)
-    }.getOrNull()
+        return Snapshot(cached.flags, cached.savedAtEpochSeconds)
+    }
 
     /**
      * Persists [flags] for the operation identified by [seq]. Out-of-order or superseded writes
      * (older than the newest one already handled) are dropped. Never throws.
      */
     suspend fun write(flags: List<Flag>, seq: Long): Unit = withContext(Dispatchers.IO) {
-        val cleanLegacy = ioMutex.withLock {
-            val cleanLegacy = !legacyHttpCacheCleaned
-            legacyHttpCacheCleaned = true
+        ioMutex.withLock {
             if (seq > lastWrittenSeq) {
                 lastWrittenSeq = seq
-                runCatching {
-                    fileSystem.createDirectories(directory, mustCreate = false)
-                    val tmp = directory / "$scopeHash.json.tmp"
-                    fileSystem.sink(tmp).buffer().use { output ->
-                        output.writeUtf8(
-                            json.encodeToString(
-                                CachedFlags(
-                                    scopeHash = scopeHash,
-                                    savedAtEpochSeconds = nowMillis() / 1000,
-                                    flags = flags
-                                )
-                            )
-                        )
-                    }
-                    moveAtomicallyOrFallback(tmp, file)
-                    pruneToNewest(maxFiles)
-                }
+                runCatching { writeSnapshot(flags) }
             }
-            cleanLegacy
         }
-        if (cleanLegacy) cleanLegacyHttpCache()
+        deleteLegacyHttpCacheOnce()
     }
 
     /**
-     * Deletes the snapshot directory. [barrierSeq] is the sequence barrier captured by
+     * Deletes the cache directory. [barrierSeq] is the sequence barrier captured by
      * `Flagsmith.clearCache()`; any write requested with a lower or equal sequence is dropped, so
      * an operation started before the clear can never repopulate the directory afterwards.
      */
@@ -136,38 +110,69 @@ internal class FlagsCache(
         }
     }
 
+    private fun readCachedFlags(): CachedFlags? {
+        if (!fileSystem.exists(file)) return null
+        if ((fileSystem.metadata(file).size ?: 0L) > maxFileBytes) return null
+        return json.decodeFromString<CachedFlags>(fileSystem.source(file).buffer().use { it.readUtf8() })
+    }
+
+    private fun writeSnapshot(flags: List<Flag>) {
+        fileSystem.createDirectories(directory, mustCreate = false)
+
+        val tmp = directory / "$scopeHash.json.tmp"
+        val cached = CachedFlags(
+            scopeHash = scopeHash,
+            savedAtEpochSeconds = nowMillis() / 1000,
+            flags = flags
+        )
+        fileSystem.sink(tmp).buffer().use { it.writeUtf8(json.encodeToString(cached)) }
+
+        moveAtomicallyOrFallback(tmp, file)
+        pruneToNewest()
+    }
+
     /**
-     * 0.1.x installations carried a Ktor HTTP cache under `<cacheDirectoryPath>/flagsmith`;
-     * nothing reads it anymore, so reclaim it once on the first write. Best-effort, deliberately
-     * executed outside [ioMutex] so the lock is never held across this IO.
+     * 0.1.x installations left a Ktor HTTP cache under `<cacheDirectoryPath>/flagsmith` that
+     * nothing reads anymore, so reclaim it once. The claim is latched under [ioMutex], but the
+     * delete itself deliberately runs outside the lock: it can walk megabytes of files and must
+     * not block concurrent snapshot writes. Best-effort — a failure is not retried.
      */
-    private fun cleanLegacyHttpCache() {
-        runCatching { fileSystem.deleteRecursively(baseDirectory / LEGACY_HTTP_CACHE_DIR, mustExist = false) }
+    private suspend fun deleteLegacyHttpCacheOnce() {
+        val claimedCleanup = ioMutex.withLock {
+            val isFirstWrite = !legacyHttpCacheCleaned
+            legacyHttpCacheCleaned = true
+            isFirstWrite
+        }
+        if (!claimedCleanup) return
+
+        runCatching {
+            fileSystem.deleteRecursively(baseDirectory / LEGACY_HTTP_CACHE_DIR, mustExist = false)
+        }
     }
 
     private fun moveAtomicallyOrFallback(tmp: Path, target: Path) {
-        try {
-            fileSystem.atomicMove(tmp, target)
-            return
-        } catch (_: IOException) {
-            // Fall through to the fallback chain.
-        }
+        if (tryAtomicMove(tmp, target)) return
+
+        // The target may already exist on filesystems where rename doesn't replace.
         runCatching { fileSystem.delete(target) }
-        try {
-            fileSystem.atomicMove(tmp, target)
-        } catch (_: IOException) {
-            // Last resort: a direct (non-atomic) write. A torn result from this path is rejected
-            // by readIfValid's parse/version checks, never surfaced as a crash.
-            fileSystem.sink(target).buffer().use { targetSink ->
-                fileSystem.source(tmp).buffer().use { tmpSource ->
-                    targetSink.writeAll(tmpSource)
-                }
-            }
-            runCatching { fileSystem.delete(tmp) }
+        if (tryAtomicMove(tmp, target)) return
+
+        // Last resort: a direct, non-atomic copy. A torn result is rejected by readIfValid's
+        // parse and version checks, never surfaced as a crash.
+        fileSystem.sink(target).buffer().use { sink ->
+            fileSystem.source(tmp).buffer().use { source -> sink.writeAll(source) }
         }
+        runCatching { fileSystem.delete(tmp) }
     }
 
-    private fun pruneToNewest(maxFiles: Int) {
+    private fun tryAtomicMove(tmp: Path, target: Path): Boolean = try {
+        fileSystem.atomicMove(tmp, target)
+        true
+    } catch (_: IOException) {
+        false
+    }
+
+    private fun pruneToNewest() {
         runCatching {
             fileSystem.list(directory)
                 .filterNot { it.name.endsWith(".tmp") }
