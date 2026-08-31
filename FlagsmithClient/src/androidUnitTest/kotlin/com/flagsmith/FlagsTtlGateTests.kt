@@ -28,6 +28,9 @@ private const val GATE_CACHE_DIR = "cache-ttl-gate"
 /** How far past the 3600s TTL the injected clock is moved when a test needs a gate miss. */
 private const val PAST_TTL_OFFSET_MILLIS = 4_000_000L
 
+/** A device clock that is wrong by a year, to exercise clock corrections. */
+private const val ONE_YEAR_MILLIS = 365L * 24 * 3600 * 1000
+
 /**
  * Tests the in-memory TTL gate: within [FlagsmithCacheConfig.cacheTTL] of the last successful
  * fetch, `getFeatureFlags` must answer from memory without issuing an HTTP request. Request counts
@@ -301,48 +304,6 @@ class FlagsTtlGateTests {
     }
 
     @Test
-    fun `g13 - a transient response does not advance the gate`() = runBlocking<Unit> {
-        val instance = testFlagsmith(baseUrl, identity = "person", cacheConfig = gateCacheConfig())
-
-        mockServer.mockResponseFor(MockEndpoint.GET_TRANSIENT_IDENTITIES)
-        assertTrue(instance.getFeatureFlags(transient = true).isSuccess)
-
-        // A transient identity is not this identity's stored state, so the next ordinary call
-        // must still go to the server rather than be gated on it.
-        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
-        val ordinary = instance.getFeatureFlags()
-
-        assertTrue(ordinary.isSuccess)
-        assertEquals(756.0, ordinary.getOrThrow().withValueFlag()?.featureStateValue)
-        mockServer.verify(
-            request().withPath("/identities/").withMethod("GET"),
-            VerificationTimes.exactly(2)
-        )
-    }
-
-    @Test
-    fun `g14 - caching disabled also disables stale serving`() = runBlocking<Unit> {
-        val instance = testFlagsmith(
-            baseUrl,
-            identity = "person",
-            cacheConfig = FlagsmithCacheConfig(enableCache = false, acceptStaleCache = true),
-            defaultFlags = defaultFlags
-        )
-        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
-        assertTrue(instance.getFeatureFlags().isSuccess)
-
-        mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
-        val result = instance.getFeatureFlags()
-
-        assertTrue(result.isSuccess)
-        assertEquals(
-            "acceptStaleCache must not resurrect in-memory flags when the cache is disabled",
-            "default",
-            result.getOrThrow().first().featureStateValue
-        )
-    }
-
-    @Test
     fun `g12 - clearCache resets the gate and the flow`() = runBlocking<Unit> {
         val instance = testFlagsmith(
             baseUrl,
@@ -363,6 +324,82 @@ class FlagsTtlGateTests {
         mockServer.verify(
             request().withPath("/identities/").withMethod("GET"),
             VerificationTimes.exactly(2)
+        )
+    }
+
+    @Test
+    fun `g13 - a backwards clock correction does not lock the gate`() = runBlocking<Unit> {
+        // The device clock starts a year ahead, so the first fetch is stamped in the future.
+        var clock = getTimeMillis() + ONE_YEAR_MILLIS
+        val instance = testFlagsmith(
+            baseUrl,
+            identity = "person",
+            cacheConfig = gateCacheConfig(),
+            nowMillis = { clock }
+        )
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        assertTrue(instance.getFeatureFlags().isSuccess)
+
+        // Clock corrected. The gate must treat a future-dated fetch as a miss and refetch. If it
+        // clamped the negative age to zero instead, it would serve that document without ever
+        // restamping it - suppressing every request until the real clock caught up a year later.
+        clock -= ONE_YEAR_MILLIS
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        assertTrue(instance.getFeatureFlags().isSuccess)
+
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("GET"),
+            VerificationTimes.exactly(2)
+        )
+
+        // ...and the refetch restamped the clock, so the gate is healthy again rather than
+        // permanently disabled.
+        assertTrue(instance.getFeatureFlags().isSuccess)
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("GET"),
+            VerificationTimes.exactly(2)
+        )
+    }
+
+    @Test
+    fun `g14 - a transient response does not advance the gate`() = runBlocking<Unit> {
+        val instance = testFlagsmith(baseUrl, identity = "person", cacheConfig = gateCacheConfig())
+
+        mockServer.mockResponseFor(MockEndpoint.GET_TRANSIENT_IDENTITIES)
+        assertTrue(instance.getFeatureFlags(transient = true).isSuccess)
+
+        // A transient identity is not this identity's stored state, so the next ordinary call
+        // must still go to the server rather than be gated on it.
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        val ordinary = instance.getFeatureFlags()
+
+        assertTrue(ordinary.isSuccess)
+        assertEquals(756.0, ordinary.getOrThrow().withValueFlag()?.featureStateValue)
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("GET"),
+            VerificationTimes.exactly(2)
+        )
+    }
+
+    @Test
+    fun `g15 - caching disabled also disables stale serving`() = runBlocking<Unit> {
+        val instance = testFlagsmith(
+            baseUrl,
+            identity = "person",
+            cacheConfig = FlagsmithCacheConfig(enableCache = false, acceptStaleCache = true),
+            defaultFlags = defaultFlags
+        )
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        assertTrue(instance.getFeatureFlags().isSuccess)
+
+        mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
+        val result = instance.getFeatureFlags()
+
+        assertTrue(result.isSuccess)
+        assertEquals(
+            "acceptStaleCache must not resurrect in-memory flags when the cache is disabled",
+            "default",
+            result.getOrThrow().first().featureStateValue
         )
     }
 }

@@ -83,8 +83,11 @@ internal class FlagsCache(
         val cached = runCatching { readCachedFlags() }.getOrNull() ?: return null
         if (cached.version != FORMAT_VERSION || cached.scopeHash != scopeHash) return null
 
-        // A backwards clock adjustment clamps to age zero rather than discarding a perfectly
-        // good snapshot. The caller's TTL gate is deliberately stricter and will refetch.
+        // A future-dated snapshot (the clock moved backwards) counts as fresh rather than being
+        // discarded: priming only decides whether the flow starts populated, it never suppresses
+        // a fetch, so the worst case is showing known-good flags for one request. Only the TTL
+        // gate suppresses fetches, which is why that one must not clamp - see
+        // Flagsmith.cachedFlagsWithinTtl.
         val ageMillis = (nowMillis() - cached.savedAtEpochMillis).coerceAtLeast(0)
         if (!acceptStale && ageMillis > ttl.inWholeMilliseconds) return null
 

@@ -258,8 +258,11 @@ class Flagsmith internal constructor(
 
         return stateMutex.withLock {
             val fetchedAt = fetchedAtMillisLocked()
-            // A backwards clock adjustment makes this negative, which misses the gate and
-            // refetches. That is deliberate: unlike priming, a miss here only costs a request.
+            // Deliberately a two-sided window rather than a clamped elapsed time. A device
+            // whose clock was ahead stamps `fetchedAt` in the future; clamping the resulting
+            // negative age to zero would make the gate hit forever, and since only a fetch
+            // restamps `fetchedAt`, nothing would ever break the loop. As written, any clock
+            // jump in either direction is a miss: one extra request, then it self-heals.
             val age = nowMillis() - fetchedAt
             flagsState.value.takeIf { fetchedAt > 0L && age in 0..cacheConfig.cacheTTL.inWholeMilliseconds }
         }
