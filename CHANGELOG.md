@@ -23,6 +23,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed — BREAKING
 
+- **`close()` is now terminal.** It releases the underlying HTTP clients as well as the real-time
+  subscription and the analytics flush loop, so the fetching methods throw `IllegalStateException`
+  afterwards (the callback wrappers surface that as `Result.failure`). Build a new instance instead
+  — which is also how you switch identity. `clearCache()` still works after `close()`.
+
 - **`identity` is the second parameter of the `Flagsmith` factories**, before `baseUrl`. Positional
   calls therefore change meaning silently rather than failing to compile: `Flagsmith("key", "https://self-hosted/api/v1/")`
   now reads that URL as an identity and falls back to the default endpoint. Use named arguments.

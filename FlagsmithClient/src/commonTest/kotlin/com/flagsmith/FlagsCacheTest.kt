@@ -15,6 +15,7 @@ import okio.fakefilesystem.FakeFileSystem
 import okio.use
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -308,17 +309,22 @@ class FlagsCacheTest {
     }
 
     @Test
-    fun writesLeaveNoTempFilesBehind() = runTest {
+    fun writesCollectTempFilesLeftBehindByACrashedWrite() = runTest {
         val fs = FakeFileSystem()
         val s = store(fs)
-
         s.write(sampleFlags, seq = 1)
+
+        // A happy-path write consumes its own temp file via the move, so cleanup is only
+        // observable against an orphan: temp names are unique per write, which means nothing
+        // reuses this path and only the sweep can remove it.
+        val dir = baseDir / "flagsmith-flags-cache"
+        val orphan = dir / "${s.scopeHash}.deadbeef.tmp"
+        fs.sink(orphan).buffer().use { it.writeUtf8("half a document") }
+
         s.write(sampleFlags, seq = 2)
 
-        // Temp names are unique per write so two writers cannot truncate each other's file, which
-        // makes cleaning them up the writer's job rather than the name's.
-        val dir = baseDir / "flagsmith-flags-cache"
-        assertTrue(fs.list(dir).none { it.name.endsWith(".tmp") }, "Temp files must not accumulate")
+        assertFalse(fs.exists(orphan), "A temp file from a crashed write must not linger")
+        assertNotNull(s.readIfValid(), "The sweep must not touch the snapshot itself")
     }
 
     @Test

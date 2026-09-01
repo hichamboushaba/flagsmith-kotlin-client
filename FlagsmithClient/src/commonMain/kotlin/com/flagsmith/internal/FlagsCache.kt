@@ -187,10 +187,10 @@ internal class FlagsCache(
     /**
      * Moves the temp file over the snapshot, falling back to an in-place write of [encoded].
      *
-     * The fallback deliberately writes from memory rather than copying from the temp file: another
-     * `FlagsCache` for the same scope (a second `Flagsmith` instance sharing the cache directory)
-     * resolves to the same paths and may have already consumed it. Copying would then fail with
-     * the target already truncated, leaving an empty file where a valid snapshot used to be.
+     * The fallback deliberately writes from memory rather than copying from the temp file, which
+     * may be gone by the time we get here: another `FlagsCache` for the same scope sweeps this
+     * directory's temp files on every write. Copying would then fail with the target already
+     * truncated, leaving an empty file where a valid snapshot used to be.
      */
     private fun replaceSnapshotWith(tmpFile: Path, encoded: ByteString) {
         if (tryAtomicMove(tmpFile)) return

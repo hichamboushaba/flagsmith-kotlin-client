@@ -195,13 +195,16 @@ class Flagsmith internal constructor(
     suspend fun getTrait(id: String): Result<Trait?> =
         getTraits().map { traits -> traits.find { it.key == id } }
 
-    suspend fun getTraits(): Result<List<Trait>> =
-        flagSmithApi.getIdentityFlagsAndTraits(requireIdentity()).map { it.traits }
+    suspend fun getTraits(): Result<List<Trait>> {
+        check(!closed) { CLOSED_MESSAGE }
+        return flagSmithApi.getIdentityFlagsAndTraits(requireIdentity()).map { it.traits }
+    }
 
     suspend fun setTrait(trait: Trait): Result<TraitWithIdentity> =
         setTraits(listOf(trait)).map { it.first() }
 
     suspend fun setTraits(traits: List<Trait>): Result<List<TraitWithIdentity>> {
+        check(!closed) { CLOSED_MESSAGE }
         val identity = requireIdentity()
         val seq = beginOperation()
         val result = flagSmithApi.postTraits(IdentityAndTraits(identity, traits))
@@ -221,13 +224,18 @@ class Flagsmith internal constructor(
         }
     }
 
-    suspend fun getIdentity(transient: Boolean = false): Result<IdentityFlagsAndTraits> =
-        flagSmithApi.getIdentityFlagsAndTraits(requireIdentity(), transient)
+    suspend fun getIdentity(transient: Boolean = false): Result<IdentityFlagsAndTraits> {
+        check(!closed) { CLOSED_MESSAGE }
+        return flagSmithApi.getIdentityFlagsAndTraits(requireIdentity(), transient)
+    }
 
     /**
      * Forgets everything this instance knows: the cached document on disk, the in-memory flags
      * (reset to the configured defaults) and the TTL gate, so the next call hits the network.
      * Flag requests already in flight are discarded.
+     *
+     * Unlike the fetching methods this still works after [close], so `close()` then `clearCache()`
+     * remains a valid teardown order — it touches no network client.
      */
     suspend fun clearCache() {
         val barrier = stateMutex.withLock {
