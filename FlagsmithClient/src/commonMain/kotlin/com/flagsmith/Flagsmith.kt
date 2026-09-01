@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.Volatile
 import okio.Path.Companion.toPath
 
 /**
@@ -65,6 +66,7 @@ class Flagsmith internal constructor(
         )
     }
     private var sseUpdatesJob: Job? = null
+    @Volatile
     private var closed = false
 
     private val flagSmithApi: FlagsmithApi
@@ -79,11 +81,17 @@ class Flagsmith internal constructor(
     // The last time we got an event from the SSE stream or via the API
     private var lastEventUpdate: Double = 0.0
 
-    // Guards [seqCounter], [lastAppliedSeq], [cached] and the [flagsState]
-    // write. Never held across IO.
+    // Guards [seqCounter], [lastAppliedSeq], [staleAsOfSeq], [cached] and the [flagsState] write.
+    // Never held across network IO, and never while [FlagsCache]'s own lock is taken. The one
+    // exception is the first touch, where resolving [primed] reads the snapshot file under this
+    // lock; that read takes no locks itself, so the ordering stays acyclic.
     private val stateMutex = Mutex()
     private var seqCounter = 0L
     private var lastAppliedSeq = 0L
+
+    // The sequence high-water mark when a real-time event last told us the server changed.
+    // Anything allocated at or below it may carry a pre-event response.
+    private var staleAsOfSeq = 0L
 
     // The document the TTL gate and the stale fallback may reuse, and when it was fetched
     // (`0L` = nothing reusable). Deliberately NOT [flagsState]: the flow holds whatever was
@@ -158,6 +166,10 @@ class Flagsmith internal constructor(
         transient: Boolean = false,
         forceRefresh: Boolean = false
     ): Result<List<Flag>> {
+        // Without this a closed instance keeps answering from the gate, so the "unusable
+        // afterwards" contract would only surface once the TTL happened to expire.
+        check(!closed) { CLOSED_MESSAGE }
+
         if (!forceRefresh && traits == null && !transient) {
             cachedFlagsWithinTtl()?.let { return Result.success(it) }
         }
@@ -228,13 +240,16 @@ class Flagsmith internal constructor(
     }
 
     fun restartRealtimeUpdates() {
-        check(!closed) { "This Flagsmith instance has been closed" }
+        check(!closed) { CLOSED_MESSAGE }
         if (!enableRealtimeUpdates) {
             error("Real-time updates are not enabled for this instance")
         }
         if (!coroutineScope.isActive) {
             error("The SSE updates scope has been canceled")
         }
+        // Cancel first: resubscribing over a live collector duplicates every event, and with it
+        // every refresh the event triggers.
+        sseUpdatesJob?.cancel()
         sseUpdatesJob = eventService?.subscribeToEvents()
     }
 
@@ -349,7 +364,11 @@ class Flagsmith internal constructor(
                 false
             } else {
                 lastAppliedSeq = seq
-                if (cacheable) cached = CachedDocument(flags, fetchedAtMillis)
+                if (cacheable) {
+                    // An operation allocated before the last real-time event may be answering with
+                    // a document generated before that event, so it must not clear the stale mark.
+                    cached = CachedDocument(flags, fetchedAtMillis, knownStale = seq <= staleAsOfSeq)
+                }
                 flagsState.value = flags
                 true
             }
@@ -369,6 +388,7 @@ class Flagsmith internal constructor(
      * would leave the superseded document serving reads for the rest of its TTL.
      */
     private suspend fun markCachedDocumentStale() = stateMutex.withLock {
+        staleAsOfSeq = seqCounter
         val document = cachedLocked()
         cached = CachedDocument(document.flags, document.fetchedAtMillis, knownStale = true)
     }
@@ -405,6 +425,8 @@ class Flagsmith internal constructor(
     companion object {
         const val DEFAULT_ENABLE_ANALYTICS = true
         const val DEFAULT_ANALYTICS_FLUSH_PERIOD_SECONDS = 10
+
+        private const val CLOSED_MESSAGE = "This Flagsmith instance has been closed"
 
         private const val IDENTITY_REQUIRED_MESSAGE =
             "This Flagsmith instance was created without an identity. " +

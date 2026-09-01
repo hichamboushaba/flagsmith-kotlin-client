@@ -205,9 +205,16 @@ class FlagsCachePrimingTests {
         val result = runBlocking { flagsmith().getFeatureFlagsSync(transient = true) }
         assertTrue(result.isSuccess)
 
+        // Assert on the identity of the flag, not just its absence: the transient document also
+        // holds exactly one flag with no "with-value" entry, so a size check alone would pass
+        // even if the transient response had been persisted.
         val freshInstance = flagsmith(defaultFlags = defaultFlags)
-        assertNull(freshInstance.flagUpdateFlow.value.withValueFlag())
         assertEquals(1, freshInstance.flagUpdateFlow.value.size)
+        assertEquals(
+            "The flow must prime from defaultFlags, not from the transient document",
+            "default-flag",
+            freshInstance.flagUpdateFlow.value.first().feature.name
+        )
     }
 
     @Test

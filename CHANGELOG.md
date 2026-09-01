@@ -23,13 +23,17 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed — BREAKING
 
+- **`identity` is the second parameter of the `Flagsmith` factories**, before `baseUrl`. Positional
+  calls therefore change meaning silently rather than failing to compile: `Flagsmith("key", "https://self-hosted/api/v1/")`
+  now reads that URL as an identity and falls back to the default endpoint. Use named arguments.
+
 - **`identity` moves to the constructor.** Every instance reads exactly one document, always within
   its environment (`environmentKey` is part of every scope): with `identity` set, the environment's
   flags evaluated for that identity; with `identity = null`, the environment's own default flags. An
   instance never mixes the two — switching identity (or also reading the environment defaults) means
-  constructing a new instance; call `close()` on the old one. Two instances sharing a
-  `cacheDirectoryPath` don't conflict (distinct snapshot files); give a pre-login instance
-  `enableAnalytics = false`.
+  constructing a new instance; call `close()` on the old one. Instances sharing a
+  `cacheDirectoryPath` write distinct snapshot files, though only the 4 most recently written are
+  kept (see README); give a pre-login instance `enableAnalytics = false`.
 - **All methods lose their `identity` parameter**: `getFeatureFlags()`, `getTrait()`, `getTraits()`,
   `setTrait()`, `setTraits()`, `getIdentity()`, `hasFeatureFlag()`, `getValueForFeature()`, and the
   callback extensions.
@@ -47,10 +51,6 @@ All notable changes to this project are documented in this file. The format is b
   `Cache-Control` request logic). The flags cache and its TTL gate replace it; `forceRefresh` now
   means exactly "bypass the TTL gate". 0.1.x installations' `flagsmith/` cache directory is
   reclaimed automatically on the first write.
-- **`identity` is the second parameter of the `Flagsmith` factories**, before `baseUrl`. Positional
-  calls therefore change meaning silently rather than failing to compile: `Flagsmith("key", "https://self-hosted/api/v1/")`
-  now reads that URL as an identity and falls back to the default endpoint. Use named arguments.
-
 - **Caching for `getTrait()`, `getTraits()` and `getIdentity()`.** These reads hit the same
   `identities/` URL as `getFeatureFlags()`, so they were previously served from the HTTP cache
   within the TTL; they are now unconditional network calls (they are cold-path reads, and caching

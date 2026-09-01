@@ -10,21 +10,26 @@ import com.flagsmith.mockResponses.mockFailureFor
 import com.flagsmith.mockResponses.mockResponseFor
 import io.ktor.util.date.getTimeMillis
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.mockserver.integration.ClientAndServer
 import org.mockserver.model.HttpRequest.request
 import org.mockserver.model.HttpResponse.response
+import org.mockserver.matchers.Times
 import org.mockserver.model.MediaType
 import org.mockserver.verify.VerificationTimes
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 private const val GATE_CACHE_DIR = "cache-ttl-gate"
 
@@ -258,9 +263,12 @@ class FlagsTtlGateTests {
             defaultFlags = defaultFlags,
             nowMillis = { getTimeMillis() + offset }
         )
-        // A successful response with zero flags is a known-good document.
+        // A successful response with zero flags is a known-good document. Times.once() matters:
+        // an unlimited expectation is matched ahead of the failure registered below, which would
+        // make the "failed" fetch of the second call succeed and pin nothing.
         mockServer.`when`(
-            request().withPath("/identities/").withMethod("GET")
+            request().withPath("/identities/").withMethod("GET"),
+            Times.once()
         ).respond(
             response()
                 .withStatusCode(200)
@@ -279,6 +287,12 @@ class FlagsTtlGateTests {
         assertTrue(
             "An empty environment is a fact - it must not be answered with defaultFlags",
             second.getOrThrow().isEmpty()
+        )
+        // Proves the second call really did go to the server and really did fail, so the
+        // assertion above came from the stale fallback rather than from a second success.
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("GET"),
+            VerificationTimes.exactly(2)
         )
     }
 
@@ -389,9 +403,68 @@ class FlagsTtlGateTests {
         instance.close()
 
         assertTrue("The event stream's client must be released too", eventApi.api.closed)
-        // The flags client is closed as well, so the instance cannot be reused.
-        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
-        assertTrue(instance.getFeatureFlags().isFailure)
+
+        // Reuse is rejected up front rather than only once the TTL happens to expire: with the
+        // gate still warm, a closed instance would otherwise keep answering successfully from
+        // memory. The callback wrappers turn this into Result.failure.
+        val exception = assertThrows(IllegalStateException::class.java) {
+            runBlocking { instance.getFeatureFlags() }
+        }
+        assertEquals("This Flagsmith instance has been closed", exception.message)
+    }
+
+    @Test
+    fun `g19 - a response predating a realtime event does not clear the stale mark`() = runBlocking<Unit> {
+        val eventApi = FakeEventApiFactory()
+        val instance = testFlagsmith(
+            baseUrl,
+            identity = "person",
+            cacheConfig = gateCacheConfig(acceptStaleCache = false),
+            enableRealtimeUpdates = true,
+            eventApiFactory = eventApi
+        )
+
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES) // request 1
+        assertTrue(instance.getFeatureFlags().isSuccess)
+
+        // Request 2: still in flight when the event arrives, so its response was generated before
+        // the change the event announces. Ordered on the server receiving it, not on a sleep.
+        mockServer.`when`(request().withPath("/identities/").withMethod("GET"), Times.once())
+            .respond(
+                response()
+                    .withContentType(MediaType.APPLICATION_JSON)
+                    .withBody(MockResponses.getIdentities)
+                    .withDelay(TimeUnit.MILLISECONDS, 1500)
+            )
+        mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES) // request 3: the event's refresh
+
+        val inFlight = async(Dispatchers.IO) { instance.getFeatureFlags(forceRefresh = true) }
+        await untilAsserted {
+            mockServer.verify(
+                request().withPath("/identities/").withMethod("GET"),
+                VerificationTimes.exactly(2)
+            )
+        }
+
+        eventApi.api.events.emit(FlagEvent(updatedAt = 1.0))
+        await untilAsserted {
+            mockServer.verify(
+                request().withPath("/identities/").withMethod("GET"),
+                VerificationTimes.exactly(3)
+            )
+        }
+
+        // The in-flight fetch now lands successfully. It predates the event, so it must not
+        // restore gate eligibility - otherwise the superseded document serves reads for a TTL.
+        assertTrue(inFlight.await().isSuccess)
+
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES) // request 4
+        assertTrue(instance.getFeatureFlags().isSuccess)
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("GET"),
+            VerificationTimes.exactly(4)
+        )
+        instance.close()
     }
 
     @Test

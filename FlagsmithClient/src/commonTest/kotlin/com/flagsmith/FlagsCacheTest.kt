@@ -292,6 +292,36 @@ class FlagsCacheTest {
     }
 
     @Test
+    fun clearStillDeletesWhenANewerWriteNeverReachedDisk() = runTest {
+        val fs = FakeFileSystem()
+        val s = store(fs, maxFileBytes = 1024)
+        s.write(listOf(flag("small", "value")), seq = 1)
+
+        // Claims sequence 2 for ordering, but the document is too large to persist, so the file
+        // still holds the sequence-1 content. A clear barrier of 1 must therefore still delete:
+        // gating on "what was requested" rather than "what landed" would leave it in place.
+        s.write(List(200) { flag("flag-$it", it.toDouble()) }, seq = 2)
+
+        s.clear(barrierSeq = 1)
+
+        assertNull(s.readIfValid())
+    }
+
+    @Test
+    fun writesLeaveNoTempFilesBehind() = runTest {
+        val fs = FakeFileSystem()
+        val s = store(fs)
+
+        s.write(sampleFlags, seq = 1)
+        s.write(sampleFlags, seq = 2)
+
+        // Temp names are unique per write so two writers cannot truncate each other's file, which
+        // makes cleaning them up the writer's job rather than the name's.
+        val dir = baseDir / "flagsmith-flags-cache"
+        assertTrue(fs.list(dir).none { it.name.endsWith(".tmp") }, "Temp files must not accumulate")
+    }
+
+    @Test
     fun pruningKeepsOnlyTheNewestFiles() = runTest {
         val fs = FakeFileSystem()
         val s = store(fs)

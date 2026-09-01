@@ -46,7 +46,16 @@ small snapshot file next to the cache directory, gated by `cacheTTL` (a `kotlin.
 - `clearCache()` resets the flow to `defaultFlags`, clears the TTL clock and deletes the snapshot.
 - `getTrait()`, `getTraits()` and `getIdentity()` are never cached and always hit the network —
   they are cold-path reads; call them sparingly.
-- `maxSnapshotSizeBytes` caps the size of a single cached snapshot; larger snapshots are skipped.
+- `maxSnapshotSizeBytes` caps the size of a single cached snapshot; larger snapshots are skipped
+  and the previous snapshot is kept.
+- Snapshots are per scope (base URL + environment key + identity), so instances sharing a
+  `cacheDirectoryPath` write separate files. The directory keeps only the **4 most recently
+  written** snapshots, so a device cycling through more than four scopes — several identities, or
+  identities plus an environment-scoped instance — loses cold-start priming for the least recently
+  used ones. They repopulate on their next successful fetch.
+- The first read of `flagUpdateFlow` performs a small synchronous file read on the calling thread.
+  That is what makes the value available before any network call; on Android's main thread it will
+  register as a StrictMode `DiskReadViolation`.
 - The snapshot is written on every successful flags fetch or trait update. Transient requests —
   `transient = true`, or traits marked `Trait.transient` — are emitted but never cached, so they
   neither reach the snapshot nor satisfy a later gated call. A `defaultFlags` fallback from a

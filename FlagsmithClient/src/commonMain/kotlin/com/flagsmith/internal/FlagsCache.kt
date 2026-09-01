@@ -14,6 +14,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okio.*
 import okio.ByteString.Companion.encodeUtf8
+import kotlin.random.Random
 import kotlin.time.Duration
 
 private const val DIR_NAME = "flagsmith-flags-cache"
@@ -66,10 +67,16 @@ internal class FlagsCache(
 
     // Exposed for tests only.
     internal val file: Path = directory / "$scopeHash.json"
-    private val tmpFile: Path = directory / "$scopeHash.json.tmp"
 
     private val ioMutex = Mutex()
+
+    // Ordering guard: advanced even when the write below fails, so a superseded write can never
+    // land after a newer one.
     private var lastWrittenSeq = 0L // guarded by ioMutex
+
+    // What is actually on disk. Only advanced by a write that completed, so `clear` can tell a
+    // real post-clear snapshot from one whose write was skipped or threw.
+    private var lastPersistedSeq = 0L // guarded by ioMutex
     private var legacyHttpCacheCleaned = false // guarded by ioMutex
 
     /**
@@ -102,7 +109,8 @@ internal class FlagsCache(
         ioMutex.withLock {
             if (seq > lastWrittenSeq) {
                 lastWrittenSeq = seq
-                runCatching { writeSnapshot(flags, fetchedAtMillis) }
+                val persisted = runCatching { writeSnapshot(flags, fetchedAtMillis) }.getOrDefault(false)
+                if (persisted) lastPersistedSeq = seq
             }
         }
         deleteLegacyHttpCacheOnce()
@@ -116,14 +124,17 @@ internal class FlagsCache(
      */
     suspend fun clear(barrierSeq: Long): Unit = withContext(Dispatchers.IO) {
         ioMutex.withLock {
-            // A write with a higher sequence was requested after this clear, so it supersedes it.
-            // `clearCache()` releases its state lock before dispatching here, which leaves room
-            // for that write to land first; deleting anyway would discard a newer snapshot.
-            if (barrierSeq < lastWrittenSeq) return@withLock
+            // A snapshot from after this clear was requested is already on disk, so it supersedes
+            // the clear: `clearCache()` releases its state lock before dispatching here, leaving
+            // room for that write to land first. This deliberately tests what was *persisted*, not
+            // what was requested — a write whose sequence was claimed but which then threw or was
+            // skipped leaves the pre-clear file in place, and that must still be deleted.
+            if (barrierSeq < lastPersistedSeq) return@withLock
 
-            lastWrittenSeq = barrierSeq
+            lastWrittenSeq = maxOf(lastWrittenSeq, barrierSeq)
+            lastPersistedSeq = 0L // nothing left on disk
             runCatching { fileSystem.delete(file, mustExist = false) }
-            runCatching { fileSystem.delete(tmpFile, mustExist = false) }
+            deleteTempFiles()
         }
     }
 
@@ -133,19 +144,25 @@ internal class FlagsCache(
         return json.decodeFromString<CachedFlags>(fileSystem.source(file).buffer().use { it.readUtf8() })
     }
 
-    private fun writeSnapshot(flags: List<Flag>, fetchedAtMillis: Long) {
+    /** Returns whether the snapshot reached disk. */
+    private fun writeSnapshot(flags: List<Flag>, fetchedAtMillis: Long): Boolean {
         val encoded = json.encodeToString(
             CachedFlags(scopeHash = scopeHash, savedAtEpochMillis = fetchedAtMillis, flags = flags)
         ).encodeUtf8()
         // Checked before writing so an oversized document leaves the previous snapshot intact
         // instead of replacing it with a file that readIfValid would reject anyway.
-        if (encoded.size > maxFileBytes) return
+        if (encoded.size > maxFileBytes) return false
 
         fileSystem.createDirectories(directory, mustCreate = false)
+        // A fresh temp name per write: another FlagsCache for this scope (a second instance, or
+        // another process) resolves to the same directory, and on a shared temp path it could
+        // truncate ours mid-write and leave us moving a half-written file over a good snapshot.
+        val tmpFile = directory / "$scopeHash.${Random.nextInt().toUInt().toString(16)}.tmp"
         fileSystem.sink(tmpFile).buffer().use { it.write(encoded) }
 
-        replaceSnapshotWith(encoded)
+        replaceSnapshotWith(tmpFile, encoded)
         pruneToNewest()
+        return true
     }
 
     /**
@@ -175,26 +192,36 @@ internal class FlagsCache(
      * resolves to the same paths and may have already consumed it. Copying would then fail with
      * the target already truncated, leaving an empty file where a valid snapshot used to be.
      */
-    private fun replaceSnapshotWith(encoded: ByteString) {
-        if (tryAtomicMove()) return
+    private fun replaceSnapshotWith(tmpFile: Path, encoded: ByteString) {
+        if (tryAtomicMove(tmpFile)) return
 
         // The target may already exist on filesystems where rename doesn't replace.
         runCatching { fileSystem.delete(file) }
-        if (tryAtomicMove()) return
+        if (tryAtomicMove(tmpFile)) return
 
         // Non-atomic, so a concurrent reader may observe a torn file; readIfValid rejects that.
         fileSystem.sink(file).buffer().use { it.write(encoded) }
         runCatching { fileSystem.delete(tmpFile) }
     }
 
-    private fun tryAtomicMove(): Boolean = try {
+    private fun tryAtomicMove(tmpFile: Path): Boolean = try {
         fileSystem.atomicMove(tmpFile, file)
         true
     } catch (_: IOException) {
         false
     }
 
+    private fun deleteTempFiles() {
+        runCatching {
+            fileSystem.list(directory)
+                .filter { it.name.startsWith("$scopeHash.") && it.name.endsWith(".tmp") }
+                .forEach { runCatching { fileSystem.delete(it) } }
+        }
+    }
+
     private fun pruneToNewest() {
+        // Temp files left by a crashed write are not snapshots and would otherwise linger forever.
+        deleteTempFiles()
         runCatching {
             fileSystem.list(directory)
                 .filterNot { it.name.endsWith(".tmp") }
