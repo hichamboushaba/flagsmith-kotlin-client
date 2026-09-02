@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 
 internal actual fun Flagsmith.Companion.create(
     environmentKey: String,
+    identity: String?,
     baseUrl: String,
     eventSourceBaseUrl: String,
     userAgentOverride: String?,
@@ -28,6 +29,7 @@ internal actual fun Flagsmith.Companion.create(
 
     return Flagsmith(
         environmentKey = environmentKey,
+        identity = identity,
         baseUrl = baseUrl,
         eventSourceBaseUrl = eventSourceBaseUrl,
         userAgentOverride = userAgentOverride,
@@ -49,6 +51,7 @@ internal actual fun Flagsmith.Companion.create(
 
 operator fun Flagsmith.Companion.invoke(
     environmentKey: String,
+    identity: String? = null,
     baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
     eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
     context: Context,
@@ -67,6 +70,7 @@ operator fun Flagsmith.Companion.invoke(
     val config = cacheConfig.initCacheDirIfNeeded()
     return Flagsmith(
         environmentKey = environmentKey,
+        identity = identity,
         baseUrl = baseUrl,
         eventSourceBaseUrl = eventSourceBaseUrl,
         enableAnalytics = enableAnalytics,

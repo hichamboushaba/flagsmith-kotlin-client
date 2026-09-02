@@ -6,6 +6,9 @@ import kotlinx.coroutines.flow.Flow
 internal interface FlagsmithEventApi {
     fun observeEvents(): Flow<FlagEvent>
 
+    /** Releases the underlying HTTP client. The instance is unusable afterwards. */
+    fun close()
+
     interface Factory {
         fun create(
             sseUrl: String,

@@ -5,6 +5,7 @@ import com.russhwolf.settings.ExperimentalSettingsApi
 import com.russhwolf.settings.Settings
 import com.russhwolf.settings.serialization.serializedValue
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -26,9 +27,10 @@ internal class DefaultFlagsmithAnalytics(
         key = EVENTS_KEY,
         defaultValue = emptyMap()
     )
+    private var flushJob: Job? = null
 
     init {
-        startPeriodicFlush()
+        flushJob = startPeriodicFlush()
     }
 
     override fun trackEvent(flagName: String) {
@@ -38,12 +40,17 @@ internal class DefaultFlagsmithAnalytics(
         currentEvents = currentEvents + (flagName to (currentFlagCount + 1))
     }
 
+    override fun stop() {
+        flushJob?.cancel()
+        flushJob = null
+    }
+
     private fun resetMap() {
         currentEvents = emptyMap()
     }
 
-    private fun startPeriodicFlush() {
-        coroutineScope.launch {
+    private fun startPeriodicFlush(): Job {
+        return coroutineScope.launch {
             while (true) {
                 if (currentEvents.isNotEmpty()) {
                     flagsmithApi.postAnalytics(currentEvents).let { result ->

@@ -3,6 +3,67 @@
 # Flagsmith Kotlin Client
 This is a fork of the original flagsmith Android client, updated to work with Kotlin multiplatform. It supports Android, iOS, and JVM platforms.
 
+## Usage
+
+The identity is a property of the `Flagsmith` instance. Every instance reads exactly one document,
+always within its environment (`environmentKey` is part of every scope): with `identity` set, that
+document is the environment's flags **evaluated for that identity**; with `identity = null`, it is
+the environment's own default flags. An instance never mixes the two — switching identity, or also
+reading the environment defaults, means constructing a new instance (two instances sharing a
+`cacheDirectoryPath` don't conflict; give the pre-login one `enableAnalytics = false`). The
+identity-scoped methods (`getTrait(s)`, `setTrait(s)`, `getIdentity`) throw
+`IllegalStateException` on an instance created without an `identity`.
+
+```kotlin
+val flagsmith = Flagsmith(
+    environmentKey = "...",
+    identity = "device-or-user-id",   // omit to read the environment's own default flags
+    cacheConfig = FlagsmithCacheConfig(
+        enableCache = true,
+        cacheDirectoryPath = context.cacheDir.absolutePath,
+        cacheTTL = 1.hours,
+        acceptStaleCache = true,
+        maxSnapshotSizeBytes = 1L * 1024 * 1024,
+    )
+)
+
+flagsmith.getFeatureFlags { result -> /* ... */ }
+```
+
+## Flags cache (offline cold start + TTL gate)
+
+With `enableCache = true`, the library caches the most recently fetched flags in memory **and** in a
+small snapshot file next to the cache directory, gated by `cacheTTL` (a `kotlin.time.Duration`):
+
+- **Within the TTL, `getFeatureFlags()` is answered from memory and issues no HTTP request at all.**
+  This survives process death: the snapshot seeds both `flagUpdateFlow` and the TTL clock, so an app
+  restarted repeatedly within the TTL makes zero flag requests.
+- `forceRefresh = true` bypasses the gate. So do `traits != null` (a POST) and `transient = true`.
+- On a failed fetch, `acceptStaleCache = true` makes the call return `Result.success` with the
+  last-known flags instead of degrading to `defaultFlags` — an empty environment is served as an
+  empty list, not as defaults. With `acceptStaleCache = false` (default), the failure falls back to
+  `defaultFlags` as before.
+- `clearCache()` resets the flow to `defaultFlags`, clears the TTL clock and deletes the snapshot.
+- `getTrait()`, `getTraits()` and `getIdentity()` are never cached and always hit the network —
+  they are cold-path reads; call them sparingly.
+- `maxSnapshotSizeBytes` caps the size of a single cached snapshot; larger snapshots are skipped
+  and the previous snapshot is kept.
+- Snapshots are per scope (base URL + environment key + identity), so instances sharing a
+  `cacheDirectoryPath` write separate files. The directory keeps only the **4 most recently
+  written** snapshots, so a device cycling through more than four scopes — several identities, or
+  identities plus an environment-scoped instance — loses cold-start priming for the least recently
+  used ones. They repopulate on their next successful fetch.
+- The first read of `flagUpdateFlow` performs a small synchronous file read on the calling thread.
+  That is what makes the value available before any network call; on Android's main thread it will
+  register as a StrictMode `DiskReadViolation`.
+- The snapshot is written on every successful flags fetch or trait update. Transient requests —
+  `transient = true`, or traits marked `Trait.transient` — are emitted but never cached, so they
+  neither reach the snapshot nor satisfy a later gated call. A `defaultFlags` fallback from a
+  failed fetch is returned to the caller only: it never overwrites the flow or the snapshot.
+  (`defaultFlags` do seed the flow when there is no snapshot, and `clearCache()` restores them.)
+
+See [CHANGELOG.md](CHANGELOG.md) for the full 0.2.0 change list and migration notes.
+
 ---------
 
 Below is the README of the original library

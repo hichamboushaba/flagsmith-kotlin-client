@@ -1,6 +1,5 @@
 package com.flagsmith.internal.http
 
-import com.flagsmith.FlagsmithCacheConfig
 import com.flagsmith.entities.Flag
 import com.flagsmith.entities.IdentityAndTraits
 import com.flagsmith.entities.IdentityFlagsAndTraits
@@ -11,26 +10,27 @@ internal interface FlagsmithApi {
     suspend fun getIdentityFlagsAndTraits(
         identity: String,
         transient: Boolean? = null,
-        forceRefresh: Boolean = false
     ): Result<IdentityFlagsAndTraits>
 
-    suspend fun getFlags(forceRefresh: Boolean = false) : Result<List<Flag>>
+    suspend fun getFlags(): Result<List<Flag>>
 
     suspend fun postTraits(identity: IdentityAndTraits) : Result<IdentityFlagsAndTraits>
 
     suspend fun postAnalytics(eventMap: Map<String, Int?>) : Result<Unit>
+
+    /** Releases the underlying HTTP client. The instance is unusable afterwards. */
+    fun close()
 
     interface Factory {
         fun create(
             baseUrl: String,
             environmentKey: String,
             userAgentOverride: String?,
-            cacheConfig: FlagsmithCacheConfig,
             requestTimeoutSeconds: Long,
             readTimeoutSeconds: Long,
             writeTimeoutSeconds: Long,
             timeTracker: FlagsmithEventTimeTracker,
             json: Json
-        ): Pair<FlagsmithApi, ClearableHttpCache?>
+        ): FlagsmithApi
     }
 }

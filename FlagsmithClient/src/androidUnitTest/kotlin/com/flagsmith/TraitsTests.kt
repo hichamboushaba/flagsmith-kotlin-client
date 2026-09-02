@@ -22,6 +22,7 @@ class TraitsTests {
         mockServer = ClientAndServer.startClientAndServer()
         flagsmith = Flagsmith(
             environmentKey = "",
+            identity = "person",
             baseUrl = "http://localhost:${mockServer.localPort}",
             enableAnalytics = false,
             cacheConfig = FlagsmithCacheConfig(enableCache = false)
@@ -37,7 +38,7 @@ class TraitsTests {
     fun testGetTraitsDefinedForPerson() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
         runBlocking {
-            val result = flagsmith.getTraitsSync("person")
+            val result = flagsmith.getTraitsSync()
             assertTrue(result.isSuccess)
             assertTrue(result.getOrThrow().isNotEmpty())
             assertEquals(
@@ -51,7 +52,7 @@ class TraitsTests {
     fun testGetTraitsNotDefinedForPerson() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
         runBlocking {
-            val result = flagsmith.getTraitsSync("person")
+            val result = flagsmith.getTraitsSync()
             assertTrue(result.isSuccess)
             assertTrue(result.getOrThrow().isNotEmpty())
             assertNull(result.getOrThrow().find { trait -> trait.key == "fake-trait" }?.stringValue)
@@ -62,7 +63,7 @@ class TraitsTests {
     fun testGetTraitById() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
         runBlocking {
-            val result = flagsmith.getTraitSync("favourite-colour", "person")
+            val result = flagsmith.getTraitSync("favourite-colour")
             assertTrue(result.isSuccess)
             assertEquals("electric pink", result.getOrThrow()?.stringValue)
         }
@@ -72,7 +73,7 @@ class TraitsTests {
     fun testGetUndefinedTraitById() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
         runBlocking {
-            val result = flagsmith.getTraitSync("favourite-cricketer", "person")
+            val result = flagsmith.getTraitSync("favourite-cricketer")
             assertTrue(result.isSuccess)
             assertNull(result.getOrThrow())
         }
@@ -82,8 +83,7 @@ class TraitsTests {
     fun testSetTrait() {
         mockServer.mockResponseFor(MockEndpoint.SET_TRAIT)
         runBlocking {
-            val result =
-                flagsmith.setTraitSync(Trait(key = "set-from-client", value = "12345"), "person")
+            val result = flagsmith.setTraitSync(Trait(key = "set-from-client", value = "12345"))
             assertTrue(result.isSuccess)
             assertEquals("set-from-client", result.getOrThrow().key)
             assertEquals("12345", result.getOrThrow().stringValue)
@@ -95,8 +95,7 @@ class TraitsTests {
     fun testSetTraits() {
         mockServer.mockResponseFor(MockEndpoint.SET_TRAITS)
         runBlocking {
-            val result =
-                flagsmith.setTraitsSync(listOf(Trait(key = "set-from-client", value = "12345")), "person")
+            val result = flagsmith.setTraitsSync(listOf(Trait(key = "set-from-client", value = "12345")))
             assertTrue(result.isSuccess)
             assertEquals("set-from-client", result.getOrThrow().first().key)
             assertEquals("12345", result.getOrThrow().first().stringValue)
@@ -108,8 +107,7 @@ class TraitsTests {
     fun testSetTraitInteger() {
         mockServer.mockResponseFor(MockEndpoint.SET_TRAIT_INTEGER)
         runBlocking {
-            val result =
-                flagsmith.setTraitSync(Trait(key = "set-from-client", value = 5), "person")
+            val result = flagsmith.setTraitSync(Trait(key = "set-from-client", value = 5))
             assertTrue(result.isSuccess)
             assertEquals("set-from-client", result.getOrThrow().key)
             assertEquals(5, result.getOrThrow().intValue)
@@ -121,8 +119,7 @@ class TraitsTests {
     fun testSetTraitDouble() {
         mockServer.mockResponseFor(MockEndpoint.SET_TRAIT_DOUBLE)
         runBlocking {
-            val result =
-                flagsmith.setTraitSync(Trait(key = "set-from-client", value = 0.5), "person")
+            val result = flagsmith.setTraitSync(Trait(key = "set-from-client", value = 0.5))
             assertTrue(result.isSuccess)
             assertEquals("set-from-client", result.getOrThrow().key)
             assertEquals(0.5, result.getOrThrow().doubleValue)
@@ -134,8 +131,7 @@ class TraitsTests {
     fun testSetTraitBoolean() {
         mockServer.mockResponseFor(MockEndpoint.SET_TRAIT_BOOLEAN)
         runBlocking {
-            val result =
-                flagsmith.setTraitSync(Trait(key = "set-from-client", value = true), "person")
+            val result = flagsmith.setTraitSync(Trait(key = "set-from-client", value = true))
             assertTrue(result.isSuccess)
             assertEquals("set-from-client", result.getOrThrow().key)
             assertEquals(true, result.getOrThrow().booleanValue)

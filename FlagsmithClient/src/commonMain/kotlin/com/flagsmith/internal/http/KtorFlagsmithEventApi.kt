@@ -29,6 +29,8 @@ internal class KtorFlagsmithEventApi(
     private val sseUrl: String,
 ) : FlagsmithEventApi {
 
+    override fun close() = httpClient.close()
+
     override fun observeEvents(): Flow<FlagEvent> {
         return flow {
             httpClient.serverSentEvents(sseUrl) {

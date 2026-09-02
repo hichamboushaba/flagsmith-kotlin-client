@@ -23,17 +23,10 @@ import org.mockserver.model.MediaType
 class FeatureFlagTests {
 
     private lateinit var mockServer: ClientAndServer
-    private lateinit var flagsmith: Flagsmith
 
     @Before
     fun setup() {
         mockServer = ClientAndServer.startClientAndServer()
-        flagsmith = Flagsmith(
-            environmentKey = "",
-            baseUrl = "http://localhost:${mockServer.localPort}",
-            enableAnalytics = false,
-            cacheConfig = FlagsmithCacheConfig(enableCache = false)
-        )
     }
 
     @After
@@ -41,11 +34,19 @@ class FeatureFlagTests {
         mockServer.stop()
     }
 
+    private fun flagsmith(identity: String? = null) = Flagsmith(
+        environmentKey = "",
+        identity = identity,
+        baseUrl = "http://localhost:${mockServer.localPort}",
+        enableAnalytics = false,
+        cacheConfig = FlagsmithCacheConfig(enableCache = false)
+    )
+
     @Test
     fun testHasFeatureFlagWithFlag() {
         mockServer.mockResponseFor(MockEndpoint.GET_FLAGS)
         runBlocking {
-            val result = flagsmith.hasFeatureFlagSync("no-value")
+            val result = flagsmith().hasFeatureFlagSync("no-value")
             assertTrue(result.isSuccess)
             assertTrue(result.getOrThrow())
         }
@@ -55,7 +56,7 @@ class FeatureFlagTests {
     fun testHasFeatureFlagWithoutFlag() {
         mockServer.mockResponseFor(MockEndpoint.GET_FLAGS)
         runBlocking {
-            val result = flagsmith.hasFeatureFlagSync("doesnt-exist")
+            val result = flagsmith().hasFeatureFlagSync("doesnt-exist")
             assertTrue(result.isSuccess)
             assertFalse(result.getOrThrow())
         }
@@ -65,7 +66,7 @@ class FeatureFlagTests {
     fun testGetFeatureFlags() {
         mockServer.mockResponseFor(MockEndpoint.GET_FLAGS)
         runBlocking {
-            val result = flagsmith.getFeatureFlagsSync()
+            val result = flagsmith().getFeatureFlagsSync()
             assertTrue(result.isSuccess)
 
             val found = result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
@@ -78,7 +79,7 @@ class FeatureFlagTests {
     fun testGetFeatureFlagsWithIdentity() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
         runBlocking {
-            val result = flagsmith.getFeatureFlagsSync(identity = "person")
+            val result = flagsmith("person").getFeatureFlagsSync()
             assertTrue(result.isSuccess)
 
             val found = result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
@@ -91,7 +92,7 @@ class FeatureFlagTests {
     fun testGetValueForFeatureExisting() {
         mockServer.mockResponseFor(MockEndpoint.GET_FLAGS)
         runBlocking {
-            val result = flagsmith.getValueForFeatureSync("with-value", identity = null)
+            val result = flagsmith().getValueForFeatureSync("with-value")
             assertTrue(result.isSuccess)
             assertEquals(7.0, result.getOrThrow())
         }
@@ -101,7 +102,7 @@ class FeatureFlagTests {
     fun testGetValueForFeatureExistingOverriddenWithIdentity() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
         runBlocking {
-            val result = flagsmith.getValueForFeatureSync("with-value", identity = "person")
+            val result = flagsmith("person").getValueForFeatureSync("with-value")
             assertTrue(result.isSuccess)
             assertEquals(756.0, result.getOrThrow())
         }
@@ -111,7 +112,7 @@ class FeatureFlagTests {
     fun testGetValueForFeatureNotExisting() {
         mockServer.mockResponseFor(MockEndpoint.GET_FLAGS)
         runBlocking {
-            val result = flagsmith.getValueForFeatureSync("not-existing", identity = null)
+            val result = flagsmith().getValueForFeatureSync("not-existing")
             assertTrue(result.isSuccess)
             assertNull(result.getOrThrow())
         }
@@ -121,8 +122,7 @@ class FeatureFlagTests {
     fun testHasFeatureForNoIdentity() {
         mockServer.mockResponseFor(MockEndpoint.GET_FLAGS)
         runBlocking {
-            val result =
-                flagsmith.hasFeatureFlagSync("with-value-just-person-enabled", identity = null)
+            val result = flagsmith().hasFeatureFlagSync("with-value-just-person-enabled")
             assertTrue(result.isSuccess)
             assertFalse(result.getOrThrow())
         }
@@ -132,8 +132,7 @@ class FeatureFlagTests {
     fun testHasFeatureWithIdentity() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
         runBlocking {
-            val result =
-                flagsmith.hasFeatureFlagSync("with-value-just-person-enabled", identity = "person")
+            val result = flagsmith("person").hasFeatureFlagSync("with-value-just-person-enabled")
             assertTrue(result.isSuccess)
             assertTrue(result.getOrThrow())
         }
@@ -142,7 +141,7 @@ class FeatureFlagTests {
     @Test
     fun testThrowsExceptionWhenCreatingAnalyticsWithoutAContext() {
         val exception = assertThrows(IllegalStateException::class.java) {
-            flagsmith = Flagsmith(
+            Flagsmith(
                 environmentKey = "",
                 baseUrl = "http://localhost:${mockServer.localPort}",
                 enableAnalytics = true
@@ -152,10 +151,48 @@ class FeatureFlagTests {
     }
 
     @Test
+    fun testThrowsWhenIdentityScopedApiUsedWithoutIdentity() {
+        // The suspend methods throw synchronously, before any network work, so the exception
+        // propagates out of runBlocking. The callback wrappers deliver it as Result.failure
+        // instead - see testIdentityScopedCallbackDeliversFailureWithoutIdentity.
+        val exception = assertThrows(IllegalStateException::class.java) {
+            runBlocking { flagsmith().getTraits() }
+        }
+        assertEquals(
+            "This Flagsmith instance was created without an identity. " +
+                "Pass `identity` to the Flagsmith factory to use identity-scoped APIs.",
+            exception.message
+        )
+    }
+
+    @Test
+    fun testIdentityScopedCallbackDeliversFailureWithoutIdentity() {
+        var result: Result<List<Trait>>? = null
+        flagsmith().getTraits { result = it }
+
+        // Unconfined dispatch means the callback has already run by the time we get here.
+        assertNotNull("The callback must be invoked, not swallowed by the launched coroutine", result)
+        assertTrue(result!!.isFailure)
+        assertTrue(result!!.exceptionOrNull() is IllegalStateException)
+    }
+
+    @Test
+    fun testThrowsWhenTraitsRequestedWithoutIdentity() {
+        val exception = assertThrows(IllegalStateException::class.java) {
+            runBlocking { flagsmith().getFeatureFlags(traits = listOf()) }
+        }
+        assertEquals(
+            "This Flagsmith instance was created without an identity. " +
+                "Pass `identity` to the Flagsmith factory to use identity-scoped APIs.",
+            exception.message
+        )
+    }
+
+    @Test
     fun testGetFeatureFlagsWithIdentityAndTraits() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
         runBlocking {
-            val result = flagsmith.getFeatureFlagsSync(identity = "person", traits = listOf())
+            val result = flagsmith("person").getFeatureFlagsSync(traits = listOf())
             assertTrue(result.isSuccess)
 
             val found = result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
@@ -203,10 +240,9 @@ class FeatureFlagTests {
         runBlocking {
             val transientTrait = Trait("transient-trait", "value", true)
             val persistedTrait = Trait("persisted-trait", "value", false)
-            val result = flagsmith.getFeatureFlagsSync(
-                "identity",
-                listOf(transientTrait, persistedTrait),
-                false,
+            val result = flagsmith("identity").getFeatureFlagsSync(
+                traits = listOf(transientTrait, persistedTrait),
+                transient = false,
             )
 
             assertTrue(result.isSuccess)
@@ -239,8 +275,9 @@ class FeatureFlagTests {
             )
 
         runBlocking {
-            val result = flagsmith.getFeatureFlagsSync(
-                "identity", listOf(),true,
+            val result = flagsmith("identity").getFeatureFlagsSync(
+                traits = listOf(),
+                transient = true,
             )
             assertTrue(result.isSuccess)
         }
