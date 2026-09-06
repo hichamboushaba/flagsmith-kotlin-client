@@ -78,15 +78,10 @@ class TraitEntityTests {
 
     @Test
     fun testTraitConstructorStringType() {
-        val trait = Trait( "string-key", "string-value")
+        val trait = Trait("string-key", "string-value")
         Assert.assertEquals("string-value", trait.traitValue)
         Assert.assertEquals("string-value", trait.stringValue)
         Assert.assertNull(trait.intValue)
-
-        val traitWithIdentity = TraitWithIdentity("string-key", "string-value", Identity("person"))
-        Assert.assertEquals("string-value", traitWithIdentity.traitValue)
-        Assert.assertEquals("string-value", traitWithIdentity.stringValue)
-        Assert.assertNull(traitWithIdentity.intValue)
     }
 
     @Test
@@ -98,14 +93,6 @@ class TraitEntityTests {
         Assert.assertNull(trait.stringValue)
         Assert.assertEquals("We should maintain the original functionality for the String .value",
             "1", trait.value)
-
-        val traitWithIdentity = TraitWithIdentity("string-key", 1, Identity("person"))
-        Assert.assertEquals(1, traitWithIdentity.traitValue)
-        Assert.assertEquals(1, traitWithIdentity.intValue)
-        Assert.assertNull("Can't convert an int to a double", traitWithIdentity.doubleValue)
-        Assert.assertNull(traitWithIdentity.stringValue)
-        Assert.assertEquals("We should maintain the original functionality for the String .value",
-            "1", traitWithIdentity.value)
     }
 
     @Test
@@ -118,15 +105,6 @@ class TraitEntityTests {
         Assert.assertNull(trait.stringValue)
         Assert.assertEquals("We should maintain the original functionality for the String .value",
             "1.0", trait.value)
-
-        val traitWithIdentity = TraitWithIdentity("string-key", 1.0, Identity("person"))
-        Assert.assertEquals(1.0, traitWithIdentity.traitValue)
-        Assert.assertEquals(1.0, traitWithIdentity.doubleValue)
-        Assert.assertEquals("JS ints are actually doubles so we should handle this",
-            1, traitWithIdentity.intValue)
-        Assert.assertNull(traitWithIdentity.stringValue)
-        Assert.assertEquals("We should maintain the original functionality for the String .value",
-            "1.0", traitWithIdentity.value)
     }
 
     @Test

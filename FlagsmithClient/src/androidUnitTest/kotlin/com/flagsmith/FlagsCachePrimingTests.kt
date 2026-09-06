@@ -2,16 +2,16 @@ package com.flagsmith
 
 import com.flagsmith.entities.Feature
 import com.flagsmith.entities.Flag
+import com.flagsmith.entities.Trait
+import com.flagsmith.internal.FlagsCache
 import com.flagsmith.mockResponses.MockEndpoint
-import com.flagsmith.mockResponses.mockDelayFor
+import com.flagsmith.mockResponses.MockResponses
 import com.flagsmith.mockResponses.mockFailureFor
 import com.flagsmith.mockResponses.mockResponseFor
 import io.ktor.util.date.getTimeMillis
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.runBlocking
-import org.awaitility.Awaitility
-import org.awaitility.kotlin.await
-import org.awaitility.kotlin.untilTrue
+import okio.Path.Companion.toPath
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -19,8 +19,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.mockserver.integration.ClientAndServer
+import org.mockserver.model.HttpRequest.request
+import org.mockserver.model.HttpResponse.response
+import org.mockserver.model.MediaType
+import org.mockserver.verify.VerificationTimes
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
 
 private const val FLAGS_CACHE_DIR = "cache-priming"
 
@@ -38,7 +41,6 @@ class FlagsCachePrimingTests {
     @Before
     fun setup() {
         mockServer = ClientAndServer.startClientAndServer()
-        Awaitility.setDefaultTimeout(java.time.Duration.ofSeconds(30))
     }
 
     @After
@@ -57,12 +59,14 @@ class FlagsCachePrimingTests {
 
     private fun flagsmith(
         identity: String? = "person",
+        transientIdentity: Boolean = false,
         defaultFlags: List<Flag> = emptyList(),
         acceptStaleCache: Boolean = true,
         nowMillis: () -> Long = ::getTimeMillis
     ) = testFlagsmith(
         baseUrl = "http://localhost:${mockServer.localPort}",
         identity = identity,
+        transientIdentity = transientIdentity,
         defaultFlags = defaultFlags,
         nowMillis = nowMillis,
         cacheConfig = FlagsmithCacheConfig(
@@ -76,57 +80,11 @@ class FlagsCachePrimingTests {
     /** Drives a successful fetch against the mock server so the real write path populates the snapshot. */
     private fun populateSnapshot() {
         mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
-        val result = runBlocking { flagsmith().getFeatureFlagsSync() }
+        val result = runBlocking { flagsmith().refreshSync() }
         assertTrue(result.isSuccess)
-        // getFeatureFlagsSync only resumes after applyFlags has completed, and applyFlags awaits
-        // the disk write, so the snapshot is durably populated at this point.
     }
 
     private fun List<Flag>.withValueFlag(): Flag? = find { it.feature.name == "with-value" }
-
-    @Test
-    fun testFlagUpdateFlowIsPopulatedBeforeDelayedResponseArrives() {
-        populateSnapshot()
-        // The response is delayed well beyond the client's 4s timeout, and the fresh instance
-        // runs on a clock past the TTL so the gate cannot answer either. The value read
-        // synchronously below can therefore only have come from the snapshot.
-        mockServer.mockDelayFor(MockEndpoint.GET_IDENTITIES)
-
-        val freshInstance = flagsmith(nowMillis = { getTimeMillis() + PAST_TTL_OFFSET_MILLIS })
-        val finished = AtomicBoolean(false)
-        freshInstance.getFeatureFlags { finished.set(true) }
-
-        val primed = freshInstance.flagUpdateFlow.value.withValueFlag()
-        assertEquals(756.0, primed?.featureStateValue)
-
-        await untilTrue finished
-    }
-
-    @Test
-    fun testStaleServeKeepsSnapshotWhenOffline() {
-        populateSnapshot()
-        mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
-
-        // Clock past the TTL so the gate misses and the fetch is genuinely attempted; with
-        // acceptStaleCache = true the failing fetch must return the snapshot as a success.
-        val offlineInstance = flagsmith(
-            defaultFlags = defaultFlags,
-            nowMillis = { getTimeMillis() + PAST_TTL_OFFSET_MILLIS }
-        )
-
-        // Primed synchronously from the snapshot before any call is made.
-        assertEquals(756.0, offlineInstance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
-
-        val result = runBlocking { offlineInstance.getFeatureFlagsSync() }
-        assertTrue(result.isSuccess)
-        assertEquals(
-            "Stale-serve must return the last-known flags, not the defaults fallback",
-            756.0,
-            result.getOrThrow().withValueFlag()?.featureStateValue
-        )
-
-        assertEquals(756.0, offlineInstance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
-    }
 
     @Test
     fun testOfflineWithoutStaleAcceptFallsBackToDefaults() {
@@ -134,7 +92,8 @@ class FlagsCachePrimingTests {
         mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
 
         // With acceptStaleCache = false the expired snapshot is rejected at prime time, so the
-        // flow starts at defaultFlags and the failing fetch degrades to defaultFlags.
+        // flow starts at defaultFlags; the failing refresh() then simply fails, leaving reads on
+        // defaultFlags rather than degrading to them itself.
         val offlineInstance = flagsmith(
             defaultFlags = defaultFlags,
             acceptStaleCache = false,
@@ -144,39 +103,9 @@ class FlagsCachePrimingTests {
         assertNull(offlineInstance.flagUpdateFlow.value.withValueFlag())
         assertEquals("default-flag", offlineInstance.flagUpdateFlow.value.first().feature.name)
 
-        val result = runBlocking { offlineInstance.getFeatureFlagsSync() }
-        assertTrue(result.isSuccess)
-        assertEquals("default", result.getOrThrow().first().featureStateValue)
-    }
-
-    @Test
-    fun testDefaultsFallbackDoesNotOverwriteAPrimedFlow() {
-        populateSnapshot()
-        mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
-
-        // The snapshot is still within its TTL, so the flow primes with the server flags. Force
-        // past the gate so the fetch is actually attempted, and fail it with stale-serve off:
-        // the caller gets defaultFlags while the flow must keep the primed document.
-        val instance = flagsmith(defaultFlags = defaultFlags, acceptStaleCache = false)
-        assertEquals(756.0, instance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
-
-        val result = runBlocking { instance.getFeatureFlags(forceRefresh = true) }
-
-        assertTrue(result.isSuccess)
-        assertEquals("default", result.getOrThrow().first().featureStateValue)
-        assertEquals(
-            "A defaults fallback must not overwrite the flags already in the flow",
-            756.0,
-            instance.flagUpdateFlow.value.withValueFlag()?.featureStateValue
-        )
-    }
-
-    @Test
-    fun testFlowSeededWithDefaultFlagsWhenNoSnapshot() {
-        val instance = flagsmith(defaultFlags = defaultFlags)
-
-        assertEquals(1, instance.flagUpdateFlow.value.size)
-        assertEquals("default-flag", instance.flagUpdateFlow.value.first().feature.name)
+        val result = runBlocking { offlineInstance.refreshSync() }
+        assertTrue(result.isFailure)
+        assertEquals("default-flag", offlineInstance.flagUpdateFlow.value.first().feature.name)
     }
 
     @Test
@@ -190,30 +119,152 @@ class FlagsCachePrimingTests {
     }
 
     @Test
-    fun testSnapshotIgnoredForEnvironmentScopeAfterIdentityFetch() {
-        populateSnapshot()
+    fun testTransientSnapshotIsPersistedButNotServedToANonTransientCall() {
+        mockServer.mockResponseFor(MockEndpoint.GET_TRANSIENT_IDENTITIES)
+        val transientInstance = flagsmith(transientIdentity = true)
+        val result = runBlocking { transientInstance.refreshSync() }
+        assertTrue(result.isSuccess)
 
-        val environmentInstance = flagsmith(identity = null, defaultFlags = defaultFlags)
+        // Transient-derived documents are persisted like any other, so the flow primes with the
+        // transient snapshot on a fresh, non-transient instance too - priming never filters by key...
+        val freshInstance = flagsmith()
+        assertEquals(1, freshInstance.flagUpdateFlow.value.size)
+        assertEquals(
+            "The flow must prime from the transient snapshot - transient is part of the request key",
+            "no-value",
+            freshInstance.flagUpdateFlow.value.first().feature.name
+        )
+        // ...but under the "post:transient:<digest>" key: a non-transient instance must not reuse
+        // it and has to fetch the identity's real flags.
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        val nonTransient = runBlocking { freshInstance.refreshSync() }
 
-        assertNull(environmentInstance.flagUpdateFlow.value.withValueFlag())
-        assertEquals("default-flag", environmentInstance.flagUpdateFlow.value.first().feature.name)
+        assertTrue(nonTransient.isSuccess)
+        assertEquals(756.0, freshInstance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("POST"),
+            VerificationTimes.exactly(2)
+        )
     }
 
     @Test
-    fun testTransientRequestIsNotPersisted() {
-        mockServer.mockResponseFor(MockEndpoint.GET_TRANSIENT_IDENTITIES)
-        val result = runBlocking { flagsmith().getFeatureFlagsSync(transient = true) }
+    fun testExplicitlyEmptyTraitsAreNotAnsweredByATraitedSnapshot() {
+        // killed by: dominance gated on the document's origin instead of whether the app has set traits
+        // The logout shape: a traited snapshot from last session is primed, the app clears its
+        // traits and refreshes. No fetch has landed yet this session, so a rule keyed on "is the
+        // cached document the primed one" would still let the old traited document answer.
+        mockServer.`when`(
+            request().withPath("/identities/").withMethod("POST")
+        ).respond(
+            response()
+                .withStatusCode(200)
+                .withContentType(MediaType.APPLICATION_JSON)
+                .withBody(MockResponses.getIdentities)
+        )
+        val first = flagsmith()
+        first.setTrait(Trait("k", "v"))
+        assertTrue(runBlocking { first.refreshSync() }.isSuccess)
+
+        val afterLogout = flagsmith()
+        afterLogout.setTraits(emptyList())
+        assertTrue(runBlocking { afterLogout.refreshSync() }.isSuccess)
+
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("POST"),
+            VerificationTimes.exactly(2)
+        )
+    }
+
+    @Test
+    fun testRemovingATraitReachesTheServerWithinTheTtl() {
+        // killed by: dominance not gated on whether the app has set traits
+        // Dominance exists for the cold start before any setTraits. Once the app has said what its
+        // traits are, an empty trait state means empty on purpose, so removeTrait must reach the
+        // server rather than be answered from the document that still has the trait applied.
+        mockServer.`when`(
+            request().withPath("/identities/").withMethod("POST")
+        ).respond(
+            response()
+                .withStatusCode(200)
+                .withContentType(MediaType.APPLICATION_JSON)
+                .withBody(MockResponses.getIdentities)
+        )
+        val instance = flagsmith()
+        instance.setTrait(Trait("k", "v"))
+        assertTrue(runBlocking { instance.refreshSync() }.isSuccess)
+
+        instance.removeTrait("k")
+        assertTrue(runBlocking { instance.refreshSync() }.isSuccess)
+
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("POST"),
+            VerificationTimes.exactly(2)
+        )
+    }
+
+    @Test
+    fun testWarmColdStartDominatesBeforeAnySetTraits() {
+        // killed by: dominance inverted
+        // Populate the snapshot via the POST path (setTraits + refresh) so it is keyed by a real
+        // trait digest, not EMPTY_DIGEST.
+        mockServer.`when`(
+            request().withPath("/identities/").withMethod("POST")
+        ).respond(
+            response()
+                .withStatusCode(200)
+                .withContentType(MediaType.APPLICATION_JSON)
+                .withBody(
+                    """{"flags": [{"feature_state_value": "warm-value", """ +
+                        """"feature": {"type": "STANDARD", "name": "with-value", "id": 35507}, """ +
+                        """"enabled": true}], "traits": []}"""
+                )
+        )
+        val instance = flagsmith()
+        instance.setTraits(listOf(Trait("k", "v")))
+        assertTrue(runBlocking { instance.refreshSync() }.isSuccess)
+
+        // Fresh instance, same scope, clock within TTL, refresh() called before any setTraits at
+        // all: dominance means the trait-less request still reuses the traited snapshot rather
+        // than transiently fetching (and caching) a trait-less document ahead of the app
+        // re-establishing its trait projection.
+        val freshInstance = flagsmith()
+        val result = runBlocking { freshInstance.refreshSync() }
+
+        assertTrue(result.isSuccess)
+        assertEquals("warm-value", freshInstance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("POST"),
+            VerificationTimes.exactly(1)
+        )
+    }
+
+    @Test
+    fun `cold start - traits matching the snapshot make zero requests`() {
+        mockServer.`when`(
+            request().withPath("/identities/").withMethod("POST")
+        ).respond(
+            response()
+                .withStatusCode(200)
+                .withContentType(MediaType.APPLICATION_JSON)
+                .withBody(MockResponses.getIdentities)
+        )
+        val traits = listOf(Trait("k", "v"))
+        val instance = flagsmith()
+        instance.setTraits(traits)
+        val result = runBlocking { instance.refreshSync() }
         assertTrue(result.isSuccess)
 
-        // Assert on the identity of the flag, not just its absence: the transient document also
-        // holds exactly one flag with no "with-value" entry, so a size check alone would pass
-        // even if the transient response had been persisted.
-        val freshInstance = flagsmith(defaultFlags = defaultFlags)
-        assertEquals(1, freshInstance.flagUpdateFlow.value.size)
-        assertEquals(
-            "The flow must prime from defaultFlags, not from the transient document",
-            "default-flag",
-            freshInstance.flagUpdateFlow.value.first().feature.name
+        // Fresh instance, same scope, POST-derived snapshot, clock within TTL, same traits set:
+        // the refresh is answered from the snapshot without any request.
+        val freshInstance = flagsmith()
+        freshInstance.setTraits(traits)
+        val second = runBlocking { freshInstance.refreshSync() }
+
+        assertTrue(second.isSuccess)
+        assertEquals(756.0, freshInstance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("POST"),
+            VerificationTimes.exactly(1)
         )
     }
 
@@ -229,26 +280,44 @@ class FlagsCachePrimingTests {
     }
 
     @Test
-    fun testDefaultsFallbackDoesNotOverwriteSnapshotOnDisk() {
-        populateSnapshot()
-        // The failing instance runs past the TTL with acceptStaleCache = false, so neither the
-        // gate nor stale-serve can short-circuit the defaults path this test exists to cover.
-        mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
-
-        val failingInstance = flagsmith(
-            defaultFlags = defaultFlags,
-            acceptStaleCache = false,
-            nowMillis = { getTimeMillis() + PAST_TTL_OFFSET_MILLIS }
+    fun testUndecodableKeyedSnapshotPrimesButNeverGates() {
+        // killed by: gate always hits
+        // A snapshot whose key the current build cannot parse must still be usable for priming
+        // without ever satisfying the gate. Written straight through FlagsCache, since nothing in
+        // the public surface can produce such a key.
+        val staleFlags = listOf(
+            Flag(
+                feature = Feature(id = 1L, name = "with-value", type = "STANDARD"),
+                enabled = true,
+                featureStateValue = 999.0
+            )
         )
-        val result = runBlocking { failingInstance.getFeatureFlagsSync() }
-        assertTrue(result.isSuccess)
+        val staleCache = FlagsCache(
+            baseDirectory = FLAGS_CACHE_DIR.toPath(),
+            scope = FlagsCache.Scope(
+                baseUrl = "http://localhost:${mockServer.localPort}",
+                environmentKey = "",
+                identity = "person"
+            ),
+            ttl = 3600.seconds,
+            acceptStale = true,
+        )
+        runBlocking { staleCache.write(staleFlags, seq = 1, fetchedAtMillis = getTimeMillis(), requestKey = "get") }
 
-        val freshInstance = flagsmith(defaultFlags = defaultFlags)
-        assertEquals(756.0, freshInstance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
-        assertEquals(
-            "Defaults must not reach the disk snapshot - the primed flow holds the server flags, not the fallback",
-            3,
-            freshInstance.flagUpdateFlow.value.size
+        // The undecodable key still primes the flow synchronously...
+        val instance = flagsmith()
+        assertEquals(999.0, instance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
+
+        // ...but an unparseable key can never satisfy a gated call: the first call must
+        // still fetch, exactly once.
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        val result = runBlocking { instance.refreshSync() }
+
+        assertTrue(result.isSuccess)
+        assertEquals(756.0, instance.flagUpdateFlow.value.withValueFlag()?.featureStateValue)
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("POST"),
+            VerificationTimes.exactly(1)
         )
     }
 }

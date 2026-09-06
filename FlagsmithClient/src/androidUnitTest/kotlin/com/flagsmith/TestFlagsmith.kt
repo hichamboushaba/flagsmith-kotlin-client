@@ -15,11 +15,13 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 
 /** Counts trackEvent calls so tests can pin analytics behaviour against the TTL gate. */
 internal class RecordingAnalytics : FlagsmithAnalytics {
-    var trackEventCount = 0
-        private set
+    // Atomic because concurrent collectors of the observe* flows track from different threads;
+    // a plain ++ loses increments and makes any count assertion flaky.
+    private val count = java.util.concurrent.atomic.AtomicInteger(0)
+    val trackEventCount: Int get() = count.get()
 
     override fun trackEvent(flagName: String) {
-        trackEventCount++
+        count.incrementAndGet()
     }
 
     override fun stop() {
@@ -43,7 +45,13 @@ internal class RecordingAnalyticsFactory : FlagsmithAnalytics.Factory {
 
 /** A real-time stream tests can drive directly, standing in for the Flagsmith SSE endpoint. */
 internal class FakeEventApi : FlagsmithEventApi {
-    val events = MutableSharedFlow<FlagEvent>(replay = 1)
+    // extraBufferCapacity + DROP_OLDEST keeps replay = 1 but lets a test emit without suspending,
+    // so a subscriber queued behind the emitter on a virtual-time scheduler cannot deadlock it.
+    val events = MutableSharedFlow<FlagEvent>(
+        replay = 1,
+        extraBufferCapacity = 1,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST
+    )
     var closed = false
         private set
 
@@ -65,23 +73,27 @@ internal class FakeEventApiFactory(val api: FakeEventApi = FakeEventApi()) : Fla
 internal fun testFlagsmith(
     baseUrl: String,
     identity: String? = null,
+    transientIdentity: Boolean = false,
     cacheConfig: FlagsmithCacheConfig = FlagsmithCacheConfig(enableCache = false),
     defaultFlags: List<Flag> = emptyList(),
     enableAnalytics: Boolean = false,
     analyticsFactory: FlagsmithAnalytics.Factory? = null,
     enableRealtimeUpdates: Boolean = false,
     eventApiFactory: FlagsmithEventApi.Factory = KtorFlagsmithEventApi,
-    nowMillis: () -> Long = ::getTimeMillis
+    nowMillis: () -> Long = ::getTimeMillis,
+    apiFactory: FlagsmithApi.Factory = KtorFlagsmithApi,
+    coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default)
 ): Flagsmith = Flagsmith(
     environmentKey = "",
     identity = identity,
+    transientIdentity = transientIdentity,
     baseUrl = baseUrl,
     enableAnalytics = enableAnalytics,
     enableRealtimeUpdates = enableRealtimeUpdates,
     cacheConfig = cacheConfig,
     defaultFlags = defaultFlags,
-    coroutineScope = CoroutineScope(Dispatchers.Default),
-    flagsmithApiFactory = KtorFlagsmithApi,
+    coroutineScope = coroutineScope,
+    flagsmithApiFactory = apiFactory,
     flagsmithEventApiFactory = eventApiFactory,
     flagsmithAnalyticsFactory = analyticsFactory,
     nowMillis = nowMillis

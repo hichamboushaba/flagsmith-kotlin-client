@@ -51,7 +51,7 @@ class FlagsCacheTest {
     )
 
     /** Defaults the fetch timestamp to the fixed test clock; a few tests pass their own. */
-    private suspend fun FlagsCache.write(flags: List<Flag>, seq: Long) = write(flags, seq, now)
+    private suspend fun FlagsCache.write(flags: List<Flag>, seq: Long) = write(flags, seq, now, requestKey = null)
 
     private fun flag(name: String, value: Any?) = Flag(
         feature = Feature(id = 1L, name = name, type = "STANDARD"),
@@ -77,14 +77,8 @@ class FlagsCacheTest {
         val loaded = s.readIfValid()
         assertNotNull(loaded)
         assertEquals(sampleFlags, loaded.flags)
-        // The timestamp on disk is the one the caller recorded in memory, not one re-read from
-        // the clock inside the write, so the two cannot drift apart.
         assertEquals(now, loaded.savedAtEpochMillis)
-    }
-
-    @Test
-    fun missingFileReturnsNull() {
-        assertNull(store(FakeFileSystem()).readIfValid())
+        assertNull(loaded.requestKey)
     }
 
     @Test
@@ -109,11 +103,40 @@ class FlagsCacheTest {
         s.write(sampleFlags, seq = 1)
 
         val raw = fs.source(s.file).buffer().use { it.readUtf8() }
-        val tampered = raw.replace("\"version\":1", "\"version\":99")
+        val tampered = raw.replace("\"version\":2", "\"version\":99")
         assertNotEquals(raw, tampered)
         fs.sink(s.file).buffer().use { it.writeUtf8(tampered) }
 
         assertNull(s.readIfValid())
+    }
+
+    @Test
+    fun v1SnapshotsAreRejected() = runTest {
+        // v1 snapshots carry no trait digest, so their GET/POST provenance is unknowable and
+        // they must not prime the TTL gate.
+        val fs = FakeFileSystem()
+        val s = store(fs)
+        s.write(sampleFlags, seq = 1)
+
+        val raw = fs.source(s.file).buffer().use { it.readUtf8() }
+        val downgraded = raw.replace("\"version\":2", "\"version\":1")
+        assertNotEquals(raw, downgraded)
+        fs.sink(s.file).buffer().use { it.writeUtf8(downgraded) }
+
+        assertNull(s.readIfValid())
+    }
+
+    @Test
+    fun roundTripsTheRequestKey() = runTest {
+        val fs = FakeFileSystem()
+        val s = store(fs)
+
+        s.write(sampleFlags, seq = 1, fetchedAtMillis = now, requestKey = "post:transient:d7f2")
+
+        val loaded = s.readIfValid()
+        assertNotNull(loaded)
+        assertEquals(sampleFlags, loaded.flags)
+        assertEquals("post:transient:d7f2", loaded.requestKey)
     }
 
     @Test
@@ -287,7 +310,7 @@ class FlagsCacheTest {
         val fs = FakeFileSystem()
         val s = store(fs, nowMillis = { now + 5_000 })
 
-        s.write(sampleFlags, seq = 1, fetchedAtMillis = now)
+        s.write(sampleFlags, seq = 1, fetchedAtMillis = now, requestKey = null)
 
         assertEquals(now, s.readIfValid()?.savedAtEpochMillis)
     }

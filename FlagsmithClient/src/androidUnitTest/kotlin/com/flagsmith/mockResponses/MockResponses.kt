@@ -1,27 +1,18 @@
 package com.flagsmith.mockResponses
 
-import com.flagsmith.entities.Trait
 import com.flagsmith.mockResponses.endpoints.FlagsEndpoint
 import com.flagsmith.mockResponses.endpoints.IdentityFlagsAndTraitsEndpoint
-import com.flagsmith.mockResponses.endpoints.TraitsBulkEndpoint
-import com.flagsmith.mockResponses.endpoints.TraitsEndpoint
 import org.mockserver.integration.ClientAndServer
 import org.mockserver.matchers.Times
 import org.mockserver.model.HttpError
 import org.mockserver.model.HttpRequest.request
 import org.mockserver.model.HttpResponse.response
 import org.mockserver.model.MediaType
-import java.util.concurrent.TimeUnit
 
 enum class MockEndpoint(val path: String, val body: String) {
     GET_IDENTITIES(IdentityFlagsAndTraitsEndpoint("").path, MockResponses.getIdentities),
     GET_FLAGS(FlagsEndpoint.path, MockResponses.getFlags),
-    SET_TRAIT(TraitsEndpoint(Trait(key = "", value = ""), "").path, MockResponses.setTrait),
-    SET_TRAITS(TraitsBulkEndpoint(listOf(Trait(key = "", value = "")), "").path, MockResponses.setTraits),
     GET_TRANSIENT_IDENTITIES(IdentityFlagsAndTraitsEndpoint("").path, MockResponses.getTransientIdentities),
-    SET_TRAIT_INTEGER(TraitsEndpoint(Trait(key = "", value = ""), "").path, MockResponses.setTraitInteger),
-    SET_TRAIT_DOUBLE(TraitsEndpoint(Trait(key = "", value = ""), "").path, MockResponses.setTraitDouble),
-    SET_TRAIT_BOOLEAN(TraitsEndpoint(Trait(key = "", value = ""), "").path, MockResponses.setTraitBoolean),
     GET_IDENTITIES_TRAIT_STRING(
         IdentityFlagsAndTraitsEndpoint("").path,
         MockResponses.getTraitString
@@ -37,10 +28,6 @@ enum class MockEndpoint(val path: String, val body: String) {
     GET_IDENTITIES_TRAIT_BOOLEAN(
         IdentityFlagsAndTraitsEndpoint("").path,
         MockResponses.getTraitBoolean
-    ),
-    POST_TRANSIENT_TRAITS(
-        IdentityFlagsAndTraitsEndpoint("").path,
-        MockResponses.postTransientIdentities
     ),
 }
 
@@ -59,19 +46,6 @@ fun ClientAndServer.mockResponseFor(path: String, body: String) {
             response()
                 .withContentType(MediaType.APPLICATION_JSON)
                 .withBody(body)
-        )
-}
-
-fun ClientAndServer.mockDelayFor(endpoint: MockEndpoint) {
-    `when`(request().withPath(endpoint.path), Times.once())
-        .respond(
-            response()
-                .withContentType(MediaType.APPLICATION_JSON)
-                .withBody(endpoint.body)
-                .withDelay(
-                    TimeUnit.SECONDS,
-                    8
-                ) // REQUEST_TIMEOUT_SECONDS is 4 in the client, so needs to be more
         )
 }
 
@@ -159,34 +133,6 @@ object MockResponses {
         }
     """.trimIndent()
 
-    val postTransientIdentities = """
-        {
-          "flags": [
-            {
-              "feature_state_value": null,
-              "feature": {
-                "type": "STANDARD",
-                "name": "no-value",
-                "id": 35506
-              },
-              "enabled": true
-            }
-          ],
-          "traits": [
-            {
-              "trait_key": "persisted-trait", 
-              "trait_value": "value",
-              "transient": false
-            },
-            {
-              "trait_key": "transient-trait",
-              "trait_value": "value",
-              "transient": true,
-            }
-          ]
-        }
-    """.trimIndent()
-
     val getFlags = """
         [
           {
@@ -217,73 +163,6 @@ object MockResponses {
             "feature_state_value": null
           }
         ]
-    """.trimIndent()
-
-    val setTrait = """
-        {
-          "identifier": "person",
-          "flags": [],
-          "traits": [
-            {
-              "trait_value": "12345",
-              "trait_key": "set-from-client",
-              "transient": false
-            }
-          ]
-        }
-    """.trimIndent()
-
-    val setTraits = """
-        {
-          "identifier": "person",
-          "flags": [],
-          "traits": [
-            {
-              "trait_value": "12345",
-              "trait_key": "set-from-client",
-              "transient": false
-            }
-          ]
-        }
-    """.trimIndent()
-
-    val setTraitInteger = """
-        {
-          "identifier": "person",
-          "flags": [],
-          "traits": [
-            {
-              "trait_value": 5,
-              "trait_key": "set-from-client"
-            }
-          ]
-        }
-    """.trimIndent()
-
-    val setTraitDouble = """
-        {
-          "identifier": "person",
-          "flags": [],
-          "traits": [
-            {
-              "trait_value": 0.5,
-              "trait_key": "set-from-client"
-            }
-          ]
-        }
-    """.trimIndent()
-
-    val setTraitBoolean = """
-        {
-          "identifier": "person",
-          "flags": [],
-          "traits": [
-            {
-              "trait_value": true,
-              "trait_key": "set-from-client"
-            }
-          ]
-        }
     """.trimIndent()
 
     val getTraitString = """

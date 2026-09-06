@@ -19,16 +19,6 @@ import kotlinx.serialization.json.Json
 internal class KtorFlagsmithApi(
     private val httpClient: HttpClient,
 ) : FlagsmithApi {
-    override suspend fun getIdentityFlagsAndTraits(
-        identity: String,
-        transient: Boolean?,
-    ): Result<IdentityFlagsAndTraits> = runCatching {
-        httpClient.get("identities/") {
-            parameter("identifier", identity)
-            parameter("transient", transient)
-        }.body()
-    }
-
     override suspend fun getFlags(): Result<List<Flag>> = runCatching {
         httpClient.get("flags/").body()
     }

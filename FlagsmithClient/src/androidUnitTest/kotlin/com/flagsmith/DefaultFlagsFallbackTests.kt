@@ -1,299 +1,132 @@
 package com.flagsmith
 
-import android.content.Context
-import android.content.SharedPreferences
-import android.content.res.Resources
-import android.graphics.Color
 import com.flagsmith.entities.Feature
 import com.flagsmith.entities.Flag
-import com.flagsmith.internal.appContext
-import com.flagsmith.mockResponses.*
+import com.flagsmith.mockResponses.MockEndpoint
+import com.flagsmith.mockResponses.MockResponses
+import com.flagsmith.mockResponses.mockFailureFor
+import com.flagsmith.mockResponses.mockResponseFor
 import kotlinx.coroutines.runBlocking
-import org.awaitility.Awaitility
-import org.awaitility.kotlin.await
-import org.awaitility.kotlin.untilNotNull
 import org.junit.After
-import org.junit.Assert
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import org.mockito.ArgumentMatchers.anyInt
-import org.mockito.ArgumentMatchers.anyString
-import org.mockito.Mock
-import org.mockito.Mockito.`when`
-import org.mockito.MockitoAnnotations
-import org.mockito.kotlin.mock
 import org.mockserver.integration.ClientAndServer
-import org.mockserver.model.HttpRequest.request
-import org.mockserver.verify.VerificationTimes
-import org.awaitility.kotlin.untilTrue
 import java.io.File
-import java.time.Duration
-import kotlin.test.assertTrue
 
-// One shared directory on purpose: the flags cache keys files by scope
-// (sha256 of baseUrl|environmentKey|identity), so environment-scoped and identity-scoped
-// instances coexist here exactly as they would with the app's real cache directory.
-private const val CACHE_DIR = "cache"
+private const val CACHE_DIR = "cache-defaults-fallback"
 
 /**
- * Covers the defaultFlags fallback for failed and timing-out flag fetches, and the interaction of
- * [Flagsmith.clearCache] with the flags cache. Request-counting and gate behaviour live in
- * [FlagsTtlGateTests]; cold-start priming lives in [FlagsCachePrimingTests].
+ * Covers the [FlagsmithCacheConfig] `defaultFlags` fallback: what reads see before anything has
+ * ever been fetched, and what they keep showing when a [Flagsmith.refresh] fails. Request-counting
+ * and gate behaviour live in [FlagsTtlGateTests]; cold-start priming lives in
+ * [FlagsCachePrimingTests].
  */
 class DefaultFlagsFallbackTests {
+
     private lateinit var mockServer: ClientAndServer
-    private lateinit var flagsmithWithCache: Flagsmith
-    private lateinit var flagsmithWithCacheIdentity: Flagsmith
-
-    @Mock
-    private lateinit var mockApplicationContext: Context
-
-    @Mock
-    private lateinit var mockContextResources: Resources
-
-    @Mock
-    private lateinit var mockSharedPreferences: SharedPreferences
 
     @Before
     fun setup() {
         mockServer = ClientAndServer.startClientAndServer()
-        System.setProperty("mockserver.logLevel", "INFO")
-        Awaitility.setDefaultTimeout(Duration.ofSeconds(30));
-        setupMocks()
-        val defaultFlags = listOf(
-            Flag(
-                feature = Feature(
-                    id = 345345L,
-                    name = "Flag 1",
-                    createdDate = "2023‐07‐07T09:07:16Z",
-                    description = "Flag 1 description",
-                    type = "CONFIG",
-                    defaultEnabled = true,
-                    initialValue = "true"
-                ), enabled = true, featureStateValue = "Vanilla Ice"
-            ),
-            Flag(
-                feature = Feature(
-                    id = 34345L,
-                    name = "Flag 2",
-                    createdDate = "2023‐07‐07T09:07:16Z",
-                    description = "Flag 2 description",
-                    type = "CONFIG",
-                    defaultEnabled = true,
-                    initialValue = "true"
-                ), enabled = true, featureStateValue = "value2"
-            ),
-        )
-
-        appContext = mockApplicationContext
-        flagsmithWithCache = Flagsmith(
-            environmentKey = "",
-            baseUrl = "http://localhost:${mockServer.localPort}",
-            enableAnalytics = true, // Mix up the analytics flag to test initialisation
-            defaultFlags = defaultFlags,
-            cacheConfig = FlagsmithCacheConfig(
-                enableCache = true,
-                cacheDirectoryPath = CACHE_DIR
-            )
-        )
-
-        flagsmithWithCacheIdentity = Flagsmith(
-            environmentKey = "",
-            identity = "person",
-            baseUrl = "http://localhost:${mockServer.localPort}",
-            enableAnalytics = false,
-            defaultFlags = defaultFlags,
-            cacheConfig = FlagsmithCacheConfig(
-                enableCache = true,
-                cacheDirectoryPath = CACHE_DIR
-            )
-        )
-    }
-
-    private fun setupMocks() {
-        MockitoAnnotations.initMocks(this)
-
-        `when`(mockApplicationContext.getResources()).thenReturn(mockContextResources)
-        `when`(mockApplicationContext.getSharedPreferences(anyString(), anyInt())).thenReturn(
-            mockSharedPreferences
-        )
-
-        `when`(mockContextResources.getString(anyInt())).thenReturn("mocked string")
-        `when`(mockContextResources.getStringArray(anyInt())).thenReturn(
-            arrayOf(
-                "mocked string 1",
-                "mocked string 2"
-            )
-        )
-        `when`(mockContextResources.getColor(anyInt())).thenReturn(Color.BLACK)
-        `when`(mockContextResources.getBoolean(anyInt())).thenReturn(false)
-        `when`(mockContextResources.getDimension(anyInt())).thenReturn(100f)
-        `when`(mockContextResources.getIntArray(anyInt())).thenReturn(intArrayOf(1, 2, 3))
-        `when`(mockApplicationContext.applicationContext).thenReturn(mockApplicationContext)
     }
 
     @After
     fun tearDown() {
         mockServer.stop()
-        // Recursive delete: File.delete() silently no-ops on non-empty directories, which would
-        // leak snapshot state between tests.
         File(CACHE_DIR).deleteRecursively()
-        appContext = null
+    }
+
+    private val defaultFlags = listOf(
+        Flag(
+            feature = Feature(id = 35507L, name = "with-value", type = "STANDARD"),
+            enabled = true,
+            featureStateValue = "default-value"
+        )
+    )
+
+    private fun flagsmith(identity: String? = "person") = testFlagsmith(
+        baseUrl = "http://localhost:${mockServer.localPort}",
+        identity = identity,
+        defaultFlags = defaultFlags,
+        cacheConfig = FlagsmithCacheConfig(enableCache = true, cacheDirectoryPath = CACHE_DIR)
+    )
+
+    @Test
+    fun testReadsServeDefaultsWhenNothingWasEverFetched() {
+        val instance = flagsmith()
+
+        assertEquals("default-value", instance.getValueForFeature("with-value"))
+        assertTrue(instance.hasFeatureFlag("with-value"))
+        assertEquals(defaultFlags, instance.flagUpdateFlow.value)
     }
 
     @Test
-    fun testGetFlagsWithFailingRequestShouldGetDefaults() {
-        mockServer.mockFailureFor(MockEndpoint.GET_FLAGS)
-        mockServer.mockResponseFor(MockEndpoint.GET_FLAGS)
-
-        // First time around we should fail and fall back to the defaults
-        var foundFromCache: Flag? = null
-        flagsmithWithCache.getFeatureFlags { result ->
-            Assert.assertTrue(result.isSuccess)
-
-            foundFromCache =
-                result.getOrThrow().find { flag -> flag.feature.name == "Flag 1" }
-        }
-
-        await untilNotNull { foundFromCache }
-        Assert.assertNotNull(foundFromCache)
-
-        // Now we mock the server and expect the server response to be returned
-        var foundFromServer: Flag? = null
-        flagsmithWithCache.getFeatureFlags { result ->
-            Assert.assertTrue(result.isSuccess)
-
-            foundFromServer =
-                result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
-        }
-
-        await untilNotNull { foundFromServer }
-        Assert.assertNotNull(foundFromServer)
-        Assert.assertEquals(7.0, foundFromServer?.featureStateValue)
-    }
-
-    @Test
-    fun testGetFlagsWithTimeoutRequestShouldGetDefaults() {
-        mockServer.mockDelayFor(MockEndpoint.GET_FLAGS)
-        mockServer.mockResponseFor(MockEndpoint.GET_FLAGS)
-
-        // First time around we should get the default flag values
-        var foundFromCache: Flag? = null
-        flagsmithWithCache.getFeatureFlags { result ->
-            Assert.assertTrue(result.isSuccess)
-
-            foundFromCache =
-                result.getOrThrow().find { flag -> flag.feature.name == "Flag 1" }
-        }
-
-        await untilNotNull { foundFromCache }
-        Assert.assertNotNull(foundFromCache)
-        Assert.assertEquals("Vanilla Ice", foundFromCache?.featureStateValue)
-
-        // Now we mock the successful request and expect the server values
-        var foundFromServer: Flag? = null
-        flagsmithWithCache.getFeatureFlags { result ->
-            Assert.assertTrue(result.isSuccess)
-
-            foundFromServer =
-                result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
-        }
-
-        await untilNotNull { foundFromServer }
-        Assert.assertNotNull(foundFromServer)
-        Assert.assertEquals(7.0, foundFromServer?.featureStateValue)
-    }
-
-    @Test
-    fun testGetFeatureFlagsWithNewCachedFlagsmithDoesntGetCachedValueWhenWeClearTheCache() {
-        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+    fun testRefreshReturnsFailureAndReadsDoNotChange() {
+        // killed by: failure resets reads to defaults
         mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
+        val instance = flagsmith()
 
-        // First time around we should be successful and cache the response
-        var foundFromServer: Flag? = null
-        runBlocking { flagsmithWithCacheIdentity.clearCache() }
-        flagsmithWithCacheIdentity.getFeatureFlags { result ->
-            Assert.assertTrue(result.isSuccess)
+        val result = runBlocking { instance.refreshSync() }
 
-            foundFromServer =
-                result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
-        }
-
-        await untilNotNull { foundFromServer }
-        Assert.assertNotNull(foundFromServer)
-        Assert.assertEquals(756.0, foundFromServer?.featureStateValue)
-
-        // Now get a new Flagsmith instance with the same cache and evict the cache straight away
-        val newFlagsmithWithClearedCache = Flagsmith(
-            environmentKey = "",
-            identity = "person",
-            baseUrl = "http://localhost:${mockServer.localPort}",
-            enableAnalytics = false,
-            cacheConfig = FlagsmithCacheConfig(
-                enableCache = true,
-                cacheDirectoryPath = CACHE_DIR
-            )
-        )
-        runBlocking { newFlagsmithWithClearedCache.clearCache() }
-
-        // Now we mock the failure and expect the get to fail as we don't have the cache to fall back on
-        var foundFromCache: Flag? = null
-        val hasFinishedGetRequest = java.util.concurrent.atomic.AtomicBoolean(false)
-        newFlagsmithWithClearedCache.getFeatureFlags { result ->
-            Assert.assertFalse("This un-cached response should fail", result.isSuccess)
-
-            foundFromCache =
-                result.getOrNull()?.find { flag -> flag.feature.name == "with-value" }
-            hasFinishedGetRequest.set(true)
-        }
-
-        await untilTrue (hasFinishedGetRequest)
-        Assert.assertNull("Shouldn't get any data back as we don't have a cache", foundFromCache)
+        assertTrue(result.isFailure)
+        assertEquals("default-value", instance.getValueForFeature("with-value"))
+        assertEquals(defaultFlags, instance.flagUpdateFlow.value)
     }
 
     @Test
-    fun testSkipsCacheWhenRefreshing() {
-        mockServer.mockResponseFor(MockEndpoint.GET_FLAGS)
+    fun testRefreshFailureAfterASuccessLeavesTheFetchedValueInPlace() {
+        // killed by: failure resets reads to defaults
+        // Populated with a value distinct from defaultFlags first, so a broken implementation
+        // that resets reads to defaults on a later failure (instead of leaving them untouched) is
+        // actually caught - defaultFlags is never what the mock server itself returns.
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        val instance = flagsmith()
+        assertTrue(runBlocking { instance.refreshSync() }.isSuccess)
+        assertEquals(756.0, instance.getValueForFeature("with-value"))
+
+        mockServer.mockFailureFor(MockEndpoint.GET_IDENTITIES)
+        val result = runBlocking { instance.refreshSync(force = true) }
+
+        assertTrue(result.isFailure)
+        assertEquals(
+            "A failed refresh must not reset reads to defaultFlags once something real was fetched",
+            756.0,
+            instance.getValueForFeature("with-value")
+        )
+        // The on-disk snapshot must also be untouched by the failed refresh.
+        val freshInstance = flagsmith()
+        assertEquals(756.0, freshInstance.getValueForFeature("with-value"))
+    }
+
+    @Test
+    fun testClearCacheResetsReadsToDefaultsAndTheNextRefreshFetches() {
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        val instance = flagsmith()
+        assertTrue(runBlocking { instance.refreshSync() }.isSuccess)
+        assertEquals(756.0, instance.getValueForFeature("with-value"))
+
+        runBlocking { instance.clearCache() }
+        assertEquals("default-value", instance.getValueForFeature("with-value"))
+
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        assertTrue(runBlocking { instance.refreshSync() }.isSuccess)
+        assertEquals(756.0, instance.getValueForFeature("with-value"))
+    }
+
+    @Test
+    fun testForceRefreshRequestsWithinTtl() {
+        mockServer.mockResponseFor(MockEndpoint.GET_IDENTITIES)
+        val instance = flagsmith()
+        assertTrue(runBlocking { instance.refreshSync() }.isSuccess)
+
         mockServer.mockResponseFor(
-            path = MockEndpoint.GET_FLAGS.path,
-            body = MockResponses.getFlags.replace("\"feature_state_value\": 7", "\"feature_state_value\": 8")
+            path = MockEndpoint.GET_IDENTITIES.path,
+            body = MockResponses.getIdentities.replace("\"feature_state_value\": 756", "\"feature_state_value\": 800")
         )
+        assertTrue(runBlocking { instance.refreshSync(force = true) }.isSuccess)
 
-        var initialValue: Flag? = null
-
-        flagsmithWithCache.getFeatureFlags { result ->
-            Assert.assertTrue(result.isSuccess)
-
-            initialValue = result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
-        }
-
-        await untilNotNull { initialValue }
-        assertTrue(initialValue?.featureStateValue == 7.0)
-
-        var updatedValue: Flag? = null
-        flagsmithWithCache.getFeatureFlags(forceRefresh = true) { result ->
-            Assert.assertTrue(result.isSuccess)
-
-            updatedValue = result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
-        }
-
-        await untilNotNull { updatedValue }
-        assertTrue(updatedValue?.featureStateValue == 8.0)
-
-        // A normal call now hits the TTL gate and serves the refreshed value from memory
-        var foundFromGate: Flag? = null
-        flagsmithWithCache.getFeatureFlags { result ->
-            Assert.assertTrue(result.isSuccess)
-
-            foundFromGate = result.getOrThrow().find { flag -> flag.feature.name == "with-value" }
-        }
-
-        await untilNotNull { foundFromGate }
-        assertTrue(foundFromGate?.featureStateValue == 8.0)
-
-        mockServer.verify(
-            request().withPath("/flags/").withMethod("GET"),
-            VerificationTimes.exactly(2)
-        )
+        assertEquals(800.0, instance.getValueForFeature("with-value"))
     }
 }
