@@ -29,22 +29,19 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import okio.Path.Companion.toPath
 
 /**
- * Flagsmith
+ * The main interface to Flagsmith. Fetch and read are separate: [refresh] is the only call that
+ * touches the network for flags. [hasFeatureFlag] and [getValueForFeature] read whatever it last
+ * fetched, and the [observeHasFeatureFlag]/[observeValueForFeature] flows do the same reactively.
  *
- * The main interface to all of the Flagsmith functionality
- *
- * @property environmentKey Take this API key from the Flagsmith dashboard and pass here
- * @property identity The identity to fetch flags and traits for. When provided, every
- * identity-scoped method targets this identity and [flagUpdateFlow] represents its flags. Passing
- * a different identity later means constructing a new instance (and [close]-ing the old one).
- * When `null`, the instance works in environment mode (environment-level flags only) and the
- * identity-scoped methods throw [IllegalStateException].
+ * @property environmentKey The API key from the Flagsmith dashboard.
+ * @property identity The identity to fetch flags and traits for. Switching identity means
+ * constructing a new instance (and [close]-ing the old one). When `null`, the instance works in
+ * environment mode and the identity-scoped methods throw [IllegalStateException].
  * @property transientIdentity Marks every identity-scoped request as transient: the server
  * evaluates but does not persist it. Requires [identity].
- * @property baseUrl By default we'll connect to the Flagsmith backend, but if you self-host you can configure here
+ * @property baseUrl Override when self-hosting.
  * @property enableAnalytics Enable analytics - default true
- * @property analyticsFlushPeriod The period in seconds between attempts by the Flagsmith SDK to push analytic events to the server
- * @constructor Create empty Flagsmith
+ * @property analyticsFlushPeriod The period in seconds between attempts to push analytics events to the server
  */
 class Flagsmith internal constructor(
     private val environmentKey: String,
