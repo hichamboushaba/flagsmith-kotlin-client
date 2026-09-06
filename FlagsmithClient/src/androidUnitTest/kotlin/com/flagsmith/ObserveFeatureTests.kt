@@ -100,8 +100,14 @@ class ObserveFeatureTests {
         mockValue(756.0, unrelated = 3.0)
         runBlocking { instance.refresh(force = true) }
 
-        assertEquals(listOf<Any?>(756.0), seen)
-        assertEquals(1, analyticsFactory.analytics.trackEventCount)
+        // Asserting the absence directly would race the collector, which runs on its own
+        // dispatcher: a wrong emission could land just after the check. Instead force one that
+        // must happen and assert the whole sequence - a spurious 756.0 would sit between them.
+        mockValue(999.0, unrelated = 4.0)
+        runBlocking { instance.refresh(force = true) }
+
+        await untilAsserted { assertEquals(listOf<Any?>(756.0, 999.0), seen) }
+        assertEquals(2, analyticsFactory.analytics.trackEventCount)
     }
 
     @Test
@@ -145,7 +151,15 @@ class ObserveFeatureTests {
         runBlocking { instance.refresh(force = true) }
 
         await untilAsserted { assertEquals(listOf(true, false), enabled) }
-        assertEquals("the value is unaffected by the switch", listOf<Any?>(756.0), values)
+
+        // Same reason as above: prove the value stream stayed silent by forcing a change it must
+        // report, rather than checking an absence the collector may not have reached yet.
+        mockValue(999.0, enabled = false)
+        runBlocking { instance.refresh(force = true) }
+
+        await untilAsserted {
+            assertEquals("the switch must not emit on the value stream", listOf<Any?>(756.0, 999.0), values)
+        }
         scope.cancel()
     }
 

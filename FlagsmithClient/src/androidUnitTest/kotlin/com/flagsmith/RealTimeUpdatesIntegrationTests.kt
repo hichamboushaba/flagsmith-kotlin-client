@@ -170,7 +170,8 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
     @Ignore("Ignore temporarily")
     fun testGettingFlagsWithRealtimeUpdatesAfterPuttingNewValueAndReconnect() = runBlocking {
         val expectedNewValue = "new-value-after-reconnect"
-        // Get the current value
+        // Reads no longer fetch, so the baseline needs an explicit refresh first.
+        Assert.assertTrue(flagsmith.refresh().isSuccess)
         val currentFlagValueString =
             flagsmith.getValueForFeature(featureId) as String?
         Assert.assertNotNull(currentFlagValueString)
@@ -207,7 +208,8 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
     @Test(timeout = 120_000)
     @Ignore("Ignore temporarily")
     fun testGettingFlagsWithRealtimeUpdatesViaFlagUpdateFlow() = runBlocking {
-        // Get the current value
+        // Reads no longer fetch, so the baseline needs an explicit refresh first.
+        Assert.assertTrue(flagsmith.refresh().isSuccess)
         val currentFlagValueString =
             flagsmith.getValueForFeature(featureId) as String?
         Assert.assertNotNull(currentFlagValueString)
