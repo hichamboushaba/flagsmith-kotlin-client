@@ -4,6 +4,7 @@ import kotlinx.kover.api.VerificationTarget
 import kotlinx.kover.api.VerificationValueType
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.io.ByteArrayOutputStream
 import java.lang.System.getenv
 import java.util.*
@@ -40,10 +41,8 @@ kotlin {
     androidTarget {
         publishLibraryVariants("release", "debug")
 
-        compilations.all {
-            kotlinOptions {
-                jvmTarget = JavaVersion.VERSION_11.toString()
-            }
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_11)
         }
     }
     jvm()
