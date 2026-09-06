@@ -3,7 +3,6 @@ package com.flagsmith
 import com.flagsmith.entities.Flag
 import com.flagsmith.entities.IdentityFlagsAndTraits
 import com.flagsmith.entities.Trait
-import com.flagsmith.entities.TraitWithIdentity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -31,14 +30,8 @@ fun Flagsmith.getTraits(result: (Result<List<Trait>>) -> Unit) =
 fun Flagsmith.getTrait(id: String, result: (Result<Trait?>) -> Unit) =
     withCallback(result) { getTrait(id) }
 
-fun Flagsmith.setTraits(traits: List<Trait>, result: (Result<List<TraitWithIdentity>>) -> Unit) =
-    withCallback(result) { setTraits(traits) }
-
-fun Flagsmith.setTrait(trait: Trait, result: (Result<TraitWithIdentity>) -> Unit) =
-    withCallback(result) { setTrait(trait) }
-
-fun Flagsmith.getIdentity(transient: Boolean = false, result: (Result<IdentityFlagsAndTraits>) -> Unit) =
-    withCallback(result) { getIdentity(transient) }
+fun Flagsmith.getIdentity(result: (Result<IdentityFlagsAndTraits>) -> Unit) =
+    withCallback(result) { getIdentity() }
 
 /**
  * Runs [block] and hands its outcome to [result] exactly once.

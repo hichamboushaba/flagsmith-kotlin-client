@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalAtomicApi::class)
+
 package com.flagsmith
 
 import com.flagsmith.entities.*
@@ -5,6 +7,7 @@ import com.flagsmith.internal.FlagsCache
 import com.flagsmith.internal.FlagsmithAnalytics
 import com.flagsmith.internal.FlagsmithEventService
 import com.flagsmith.internal.FlagsmithEventTimeTracker
+import com.flagsmith.internal.update
 import com.flagsmith.internal.http.FlagsmithApi
 import com.flagsmith.internal.http.FlagsmithEventApi
 import io.ktor.util.date.getTimeMillis
@@ -16,6 +19,8 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import okio.Path.Companion.toPath
 
 /**
@@ -29,6 +34,8 @@ import okio.Path.Companion.toPath
  * a different identity later means constructing a new instance (and [close]-ing the old one).
  * When `null`, the instance works in environment mode (environment-level flags only) and the
  * identity-scoped methods throw [IllegalStateException].
+ * @property transientIdentity Marks every identity-scoped request as transient: the server
+ * evaluates but does not persist it. Requires [identity].
  * @property baseUrl By default we'll connect to the Flagsmith backend, but if you self-host you can configure here
  * @property enableAnalytics Enable analytics - default true
  * @property analyticsFlushPeriod The period in seconds between attempts by the Flagsmith SDK to push analytic events to the server
@@ -37,6 +44,7 @@ import okio.Path.Companion.toPath
 class Flagsmith internal constructor(
     private val environmentKey: String,
     private val identity: String? = null,
+    private val transientIdentity: Boolean = false,
     private val baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
     private val eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
     private val enableAnalytics: Boolean = DEFAULT_ENABLE_ANALYTICS,
@@ -119,7 +127,16 @@ class Flagsmith internal constructor(
     /** The most recently known flags: primed from disk on first access, then updated by every successful fetch. */
     val flagUpdateFlow: StateFlow<List<Flag>> get() = flagsState
 
+    /**
+     * This instance's traits: in memory only, never persisted, sent in full on every identity-scoped
+     * [refresh]. [getIdentity], [getTraits] and [getTrait] send an empty list instead.
+     */
+    private val traitState = AtomicReference<Map<String, Trait>>(emptyMap())
+
     init {
+        require(identity != null || !transientIdentity) {
+            "transientIdentity requires an identity"
+        }
         require(!cacheConfig.enableCache || cacheConfig.cacheDirectoryPath.isNotEmpty()) {
             "Cache directory path must be provided when cache is enabled"
         }
@@ -192,41 +209,33 @@ class Flagsmith internal constructor(
     suspend fun getValueForFeature(featureId: String): Result<Any?> =
         getFeatureFlag(featureId).map { flag -> flag?.featureStateValue }
 
-    suspend fun getTrait(id: String): Result<Trait?> =
-        getTraits().map { traits -> traits.find { it.key == id } }
-
-    suspend fun getTraits(): Result<List<Trait>> {
+    /** A read-only diagnostic of the server's *stored* view of this identity. */
+    suspend fun getIdentity(): Result<IdentityFlagsAndTraits> {
         check(!closed) { CLOSED_MESSAGE }
-        return flagSmithApi.getIdentityFlagsAndTraits(requireIdentity()).map { it.traits }
+        // An empty trait list keeps the POST read-only: the server modifies nothing.
+        return flagSmithApi.postTraits(IdentityAndTraits(requireIdentity(), emptyList(), transientIdentity))
     }
 
-    suspend fun setTrait(trait: Trait): Result<TraitWithIdentity> =
-        setTraits(listOf(trait)).map { it.first() }
+    /** The traits the server currently has stored for this identity. */
+    suspend fun getTraits(): Result<List<Trait>> = getIdentity().map { it.traits }
 
-    suspend fun setTraits(traits: List<Trait>): Result<List<TraitWithIdentity>> {
-        check(!closed) { CLOSED_MESSAGE }
-        val identity = requireIdentity()
-        val seq = beginOperation()
-        val result = flagSmithApi.postTraits(IdentityAndTraits(identity, traits))
+    /** The trait the server currently has stored under [id], or `null` if it has none. */
+    suspend fun getTrait(id: String): Result<Trait?> = getTraits().map { traits -> traits.find { it.key == id } }
 
-        if (result.isSuccess) {
-            applyFlags(result.getOrThrow().flags, seq, cacheable = isCacheable(transient = false, traits = traits))
-        }
-
-        return result.map { response ->
-            response.traits.map { trait ->
-                TraitWithIdentity(
-                    key = trait.key,
-                    traitValue = trait.traitValue,
-                    identity = Identity(identity)
-                )
-            }
-        }
+    /** Upserts [traits] by [Trait.key] into the in-memory trait state sent by [refresh]. */
+    fun setTraits(traits: List<Trait>) {
+        requireIdentity()
+        val upserts = traits.associateBy { it.key }
+        traitState.update { it + upserts }
     }
 
-    suspend fun getIdentity(transient: Boolean = false): Result<IdentityFlagsAndTraits> {
-        check(!closed) { CLOSED_MESSAGE }
-        return flagSmithApi.getIdentityFlagsAndTraits(requireIdentity(), transient)
+    /** Upserts [trait] into the in-memory trait state sent by [refresh]. */
+    fun setTrait(trait: Trait) = setTraits(listOf(trait))
+
+    /** Stops sending [key]; the server keeps whatever value it last stored for it. */
+    fun removeTrait(key: String) {
+        requireIdentity()
+        traitState.update { it - key }
     }
 
     /**
@@ -322,13 +331,8 @@ class Flagsmith internal constructor(
             return flagSmithApi.getFlags()
         }
 
-        return if (traits != null) {
-            flagSmithApi.postTraits(IdentityAndTraits(identity, traits, transient)).map { it.flags }
-        } else {
-            // Pass transient flag only if it's true
-            // TODO: revisit this when https://github.com/Flagsmith/flagsmith/issues/5260 is resolved
-            flagSmithApi.getIdentityFlagsAndTraits(identity, transient.takeIf { it }).map { it.flags }
-        }
+        // Always POST, even with no traits: an empty-trait POST still returns the identity's stored view.
+        return flagSmithApi.postTraits(IdentityAndTraits(identity, traits.orEmpty(), transient)).map { it.flags }
     }
 
     /**
@@ -443,6 +447,7 @@ class Flagsmith internal constructor(
         operator fun invoke(
             environmentKey: String,
             identity: String? = null,
+            transientIdentity: Boolean = false,
             baseUrl: String = "https://edge.api.flagsmith.com/api/v1/",
             eventSourceBaseUrl: String = "https://realtime.flagsmith.com/",
             userAgentOverride: String? = null,
@@ -459,6 +464,7 @@ class Flagsmith internal constructor(
         ) = create(
             environmentKey = environmentKey,
             identity = identity,
+            transientIdentity = transientIdentity,
             baseUrl = baseUrl,
             eventSourceBaseUrl = eventSourceBaseUrl,
             userAgentOverride = userAgentOverride,

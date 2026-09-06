@@ -7,11 +7,6 @@ import com.flagsmith.internal.FlagsmithEventTimeTracker
 import kotlinx.serialization.json.Json
 
 internal interface FlagsmithApi {
-    suspend fun getIdentityFlagsAndTraits(
-        identity: String,
-        transient: Boolean? = null,
-    ): Result<IdentityFlagsAndTraits>
-
     suspend fun getFlags(): Result<List<Flag>>
 
     suspend fun postTraits(identity: IdentityAndTraits) : Result<IdentityFlagsAndTraits>
