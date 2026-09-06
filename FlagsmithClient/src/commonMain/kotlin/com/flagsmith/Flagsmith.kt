@@ -79,6 +79,18 @@ class Flagsmith internal constructor(
         )
     }
     private var sseUpdatesJob: Job? = null
+
+    // Parented to the caller's job so cancelling the caller's scope still cancels SSE work, but
+    // owned here so close() can cancel SSE work without touching the caller's scope.
+    private val sseScope: CoroutineScope? =
+        if (eventService == null) {
+            null
+        } else {
+            CoroutineScope(
+                coroutineScope.coroutineContext + SupervisorJob(coroutineScope.coroutineContext[Job])
+            )
+        }
+
     @Volatile
     private var closed = false
 
@@ -86,7 +98,6 @@ class Flagsmith internal constructor(
     private val analytics: FlagsmithAnalytics?
     private val flagsCache: FlagsCache?
 
-    // The last time we got an event from the SSE stream or via the API
     private var lastEventUpdate: Double = 0.0
 
     // Guards the sequence counters, [cached] and the [flagsState] write. Never held across network
@@ -95,8 +106,8 @@ class Flagsmith internal constructor(
     private var seqCounter = 0L
     private var lastAppliedSeq = 0L
 
-    // The sequence high-water mark when a real-time event last told us the server changed.
-    // Anything allocated at or below it may carry a pre-event response.
+    // Sequence high-water mark at the last real-time event: anything allocated at or below it may
+    // carry a pre-event response.
     private var staleAsOfSeq = 0L
 
     // The document the TTL gate may reuse. Deliberately not [flagsState]: the flow also holds
@@ -186,17 +197,32 @@ class Flagsmith internal constructor(
     suspend fun refresh(force: Boolean = false): Result<Unit> {
         check(!closed) { CLOSED_MESSAGE }
 
-        if (!force && withinTtlGate(RequestKey.forRequest(identity, traits, transientIdentity))) {
-            return Result.success(Unit)
+        return refreshInternal(force)
+    }
+
+    /**
+     * Shared with the SSE event path, which launches it fire-and-forget: a close that lands here
+     * must fail the `Result` rather than throw like [refresh], or the exception would propagate
+     * into the caller-supplied scope.
+     */
+    private suspend fun refreshInternal(force: Boolean): Result<Unit> {
+        if (closed) {
+            return Result.failure(IllegalStateException(CLOSED_MESSAGE))
         }
 
         val traits = traitState.load().values.toList()
+        val key = RequestKey.forRequest(identity, traits, transientIdentity)
+
+        if (!force && withinTtlGate(key)) {
+            return Result.success(Unit)
+        }
+
         val seq = beginOperation()
         val result = fetchFlags(traits)
 
         return result.fold(
             onSuccess = { flags ->
-                applyFlags(flags, seq, RequestKey.forRequest(identity, traits, transientIdentity))
+                applyFlags(flags, seq, key)
                 Result.success(Unit)
             },
             onFailure = { error -> Result.failure(error) }
@@ -295,23 +321,20 @@ class Flagsmith internal constructor(
         if (!coroutineScope.isActive) {
             error("The SSE updates scope has been canceled")
         }
-        // Cancel first: resubscribing over a live collector duplicates every event, and with it
-        // every refresh the event triggers.
+        // Cancel first: resubscribing over a live collector would duplicate every event.
         sseUpdatesJob?.cancel()
         sseUpdatesJob = eventService?.subscribeToEvents()
     }
 
     /**
      * Releases everything this instance owns: the real-time subscription, the analytics flush loop
-     * and the underlying HTTP clients (each of which holds an engine and a connection pool).
-     *
-     * The instance is unusable afterwards — build a new one, which is also how you switch
-     * [identity]. Stop analytics and real-time updates without discarding the instance is not
-     * supported; use [restartRealtimeUpdates] only before closing.
+     * and the HTTP clients. The instance is unusable afterwards; build a new one, which is also how
+     * you switch [identity].
      */
     fun close() {
         closed = true
-        sseUpdatesJob?.cancel()
+        // First, so no SSE-scheduled refresh can run against the clients released below.
+        sseScope?.cancel()
         analytics?.stop()
         flagSmithApi.close()
         eventService?.close()
@@ -412,28 +435,29 @@ class Flagsmith internal constructor(
         cached = cachedLocked().copy(knownStale = true)
     }
 
-    private fun FlagsmithEventService.subscribeToEvents() = sseEventsFlow
-        .onEach { event ->
-            lastEventUpdate = event.updatedAt ?: lastEventUpdate
+    private fun FlagsmithEventService.subscribeToEvents(): Job {
+        val scope = requireNotNull(sseScope)
+        return sseEventsFlow
+            .onEach { event ->
+                lastEventUpdate = event.updatedAt ?: lastEventUpdate
 
-            // Check whether this event is anything new
-            if (lastEventUpdate > lastFlagFetchTime) {
-                lastFlagFetchTime = lastEventUpdate
+                if (lastEventUpdate > lastFlagFetchTime) {
+                    lastFlagFetchTime = lastEventUpdate
 
-                // The event proves what we hold is superseded, so retire it before refreshing:
-                // `forceRefresh` only bypasses the gate for this one call, and the refresh may
-                // fail. Nothing is logged on success - a stale or defaults fallback also returns
-                // a successful Result, so it would not mean we got the new values.
-                markCachedDocumentStale()
-                refresh(force = true) { res ->
-                    if (res.isFailure) {
-                        // TODO: provide a logging mechanism
-                        println("Error getting flags in SSE stream: ${res.exceptionOrNull()}")
+                    // Before the refresh allocates its sequence, so its own response is not marked
+                    // pre-event; and regardless of the refresh's outcome, since it may fail.
+                    markCachedDocumentStale()
+                    scope.launch {
+                        val res = refreshInternal(force = true)
+                        if (res.isFailure && !closed) {
+                            // A failure after close is the expected shutdown rejection, not news.
+                            println("Error getting flags in SSE stream: ${res.exceptionOrNull()}")
+                        }
                     }
                 }
             }
-        }
-        .launchIn(coroutineScope)
+            .launchIn(scope)
+    }
 
     companion object {
         const val DEFAULT_ENABLE_ANALYTICS = true
