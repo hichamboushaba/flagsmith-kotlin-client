@@ -141,6 +141,18 @@ class Flagsmith internal constructor(
      */
     private val traitState = AtomicReference<Map<String, Trait>>(emptyMap())
 
+    /**
+     * Set by the first [setTraits]/[setTrait]/[removeTrait] of this instance's life.
+     *
+     * Gates the dominance rule, which lets a traited document answer a trait-less refresh. That
+     * exists for the cold start before the app has established its traits; once the app has said
+     * what they are, an empty trait state means empty *on purpose* - a logout that clears them, or
+     * a [removeTrait] - and must reach the server rather than be answered from a document that
+     * still has the old traits applied.
+     */
+    @Volatile
+    private var traitsInitialized = false
+
     init {
         require(identity != null || !transientIdentity) {
             "transientIdentity requires an identity"
@@ -234,8 +246,9 @@ class Flagsmith internal constructor(
     }
 
     /**
-     * A flag's value, whether or not it is enabled; `null` only if the flag is absent. `enabled`
-     * is a separate switch, read it with [hasFeatureFlag].
+     * A flag's value, whether or not it is enabled. `null` when the flag is absent *and* when it
+     * is present with no configured value, so this cannot be used to test presence - use
+     * [hasFeatureFlag] for that, and note `enabled` is a separate switch it reads.
      */
     fun getValueForFeature(featureId: String): Any? {
         val flag = flagsState.value.find { it.feature.name == featureId }
@@ -283,6 +296,7 @@ class Flagsmith internal constructor(
     /** Upserts [traits] by [Trait.key] into the in-memory trait state sent by [refresh]. */
     fun setTraits(traits: List<Trait>) {
         requireIdentity()
+        traitsInitialized = true
         val upserts = traits.associateBy { it.key }
         traitState.update { it + upserts }
     }
@@ -293,6 +307,7 @@ class Flagsmith internal constructor(
     /** Stops sending [key]; the server keeps whatever value it last stored for it. */
     fun removeTrait(key: String) {
         requireIdentity()
+        traitsInitialized = true
         traitState.update { it - key }
     }
 
@@ -374,7 +389,7 @@ class Flagsmith internal constructor(
             // gate hit forever, since only a fetch restamps `fetchedAt`. As written, a clock jump
             // in either direction costs one extra request and then self-heals.
             val age = nowMillis() - fetchedAt
-            document.requestKey?.satisfies(requestKey) == true &&
+            document.requestKey?.satisfies(requestKey, allowDominance = !traitsInitialized) == true &&
                 !document.knownStale &&
                 fetchedAt > 0L &&
                 age in 0..cacheConfig.cacheTTL.inWholeMilliseconds

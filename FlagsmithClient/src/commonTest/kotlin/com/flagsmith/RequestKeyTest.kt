@@ -148,10 +148,12 @@ class RequestKeyTest {
 
     @Test
     fun encodeDecodeRoundTrips() = runTest {
+        // A real-shaped digest: decode rejects anything that is not 64 lowercase hex chars.
+        val digest = "a".repeat(64)
         val keys = listOf(
             RequestKey.Environment,
-            RequestKey.Identity(transient = false, digest = "abc123"),
-            RequestKey.Identity(transient = true, digest = "abc123"),
+            RequestKey.Identity(transient = false, digest = digest),
+            RequestKey.Identity(transient = true, digest = digest),
         )
         for (key in keys) {
             assertEquals(key, RequestKey.decode(key.encode()))
@@ -168,6 +170,13 @@ class RequestKeyTest {
         assertNull(RequestKey.decode(""))
         assertNull(RequestKey.decode("post"))
         assertNull(RequestKey.decode("environment"))
+        // A prefix alone, or a suffix that is not the digest encode emits, must not parse: any
+        // identity key can dominate a trait-less request, so a foreign snapshot would otherwise
+        // suppress the first refresh of a session.
+        assertNull(RequestKey.decode("post:"))
+        assertNull(RequestKey.decode("post:garbage"))
+        assertNull(RequestKey.decode("post:transient:garbage"))
+        assertNull(RequestKey.decode("post:" + "A".repeat(64)))
     }
 
     @Test
@@ -175,7 +184,9 @@ class RequestKeyTest {
         // killed by: dominance inverted
         val traited = RequestKey.Identity(transient = false, digest = "abc123")
         val traitLessRequest = RequestKey.Identity(transient = false, digest = RequestKey.EMPTY_DIGEST)
-        assertTrue(traited.satisfies(traitLessRequest))
+        assertTrue(traited.satisfies(traitLessRequest, allowDominance = true))
+        // ...and only when the document came off disk; a fetched one must not dominate.
+        assertFalse(traited.satisfies(traitLessRequest, allowDominance = false))
     }
 
     @Test
@@ -183,7 +194,7 @@ class RequestKeyTest {
         // killed by: dominance inverted
         val traitLessDocument = RequestKey.Identity(transient = false, digest = RequestKey.EMPTY_DIGEST)
         val traitedRequest = RequestKey.Identity(transient = false, digest = "abc123")
-        assertFalse(traitLessDocument.satisfies(traitedRequest))
+        assertFalse(traitLessDocument.satisfies(traitedRequest, allowDominance = true))
     }
 
     @Test
@@ -191,18 +202,18 @@ class RequestKeyTest {
         // killed by: marker ignored
         val transientDocument = RequestKey.Identity(transient = true, digest = "abc123")
         val nonTransientTraitLessRequest = RequestKey.Identity(transient = false, digest = RequestKey.EMPTY_DIGEST)
-        assertFalse(transientDocument.satisfies(nonTransientTraitLessRequest))
+        assertFalse(transientDocument.satisfies(nonTransientTraitLessRequest, allowDominance = true))
 
         val nonTransientDocument = RequestKey.Identity(transient = false, digest = "abc123")
         val transientTraitLessRequest = RequestKey.Identity(transient = true, digest = RequestKey.EMPTY_DIGEST)
-        assertFalse(nonTransientDocument.satisfies(transientTraitLessRequest))
+        assertFalse(nonTransientDocument.satisfies(transientTraitLessRequest, allowDominance = true))
     }
 
     @Test
     fun `satisfies - Environment only ever satisfies Environment`() = runTest {
-        assertTrue(RequestKey.Environment.satisfies(RequestKey.Environment))
+        assertTrue(RequestKey.Environment.satisfies(RequestKey.Environment, allowDominance = true))
         val identityKey = RequestKey.Identity(transient = false, digest = RequestKey.EMPTY_DIGEST)
-        assertFalse(RequestKey.Environment.satisfies(identityKey))
-        assertFalse(identityKey.satisfies(RequestKey.Environment))
+        assertFalse(RequestKey.Environment.satisfies(identityKey, allowDominance = true))
+        assertFalse(identityKey.satisfies(RequestKey.Environment, allowDominance = true))
     }
 }

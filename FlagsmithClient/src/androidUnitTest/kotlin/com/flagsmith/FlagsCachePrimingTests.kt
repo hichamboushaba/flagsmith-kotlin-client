@@ -148,6 +148,61 @@ class FlagsCachePrimingTests {
     }
 
     @Test
+    fun testExplicitlyEmptyTraitsAreNotAnsweredByATraitedSnapshot() {
+        // killed by: dominance gated on the document's origin instead of whether the app has set traits
+        // The logout shape: a traited snapshot from last session is primed, the app clears its
+        // traits and refreshes. No fetch has landed yet this session, so a rule keyed on "is the
+        // cached document the primed one" would still let the old traited document answer.
+        mockServer.`when`(
+            request().withPath("/identities/").withMethod("POST")
+        ).respond(
+            response()
+                .withStatusCode(200)
+                .withContentType(MediaType.APPLICATION_JSON)
+                .withBody(MockResponses.getIdentities)
+        )
+        val first = flagsmith()
+        first.setTrait(Trait("k", "v"))
+        assertTrue(runBlocking { first.refreshSync() }.isSuccess)
+
+        val afterLogout = flagsmith()
+        afterLogout.setTraits(emptyList())
+        assertTrue(runBlocking { afterLogout.refreshSync() }.isSuccess)
+
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("POST"),
+            VerificationTimes.exactly(2)
+        )
+    }
+
+    @Test
+    fun testRemovingATraitReachesTheServerWithinTheTtl() {
+        // killed by: dominance not gated on whether the app has set traits
+        // Dominance exists for the cold start before any setTraits. Once the app has said what its
+        // traits are, an empty trait state means empty on purpose, so removeTrait must reach the
+        // server rather than be answered from the document that still has the trait applied.
+        mockServer.`when`(
+            request().withPath("/identities/").withMethod("POST")
+        ).respond(
+            response()
+                .withStatusCode(200)
+                .withContentType(MediaType.APPLICATION_JSON)
+                .withBody(MockResponses.getIdentities)
+        )
+        val instance = flagsmith()
+        instance.setTrait(Trait("k", "v"))
+        assertTrue(runBlocking { instance.refreshSync() }.isSuccess)
+
+        instance.removeTrait("k")
+        assertTrue(runBlocking { instance.refreshSync() }.isSuccess)
+
+        mockServer.verify(
+            request().withPath("/identities/").withMethod("POST"),
+            VerificationTimes.exactly(2)
+        )
+    }
+
+    @Test
     fun testWarmColdStartDominatesBeforeAnySetTraits() {
         // killed by: dominance inverted
         // Populate the snapshot via the POST path (setTraits + refresh) so it is keyed by a real

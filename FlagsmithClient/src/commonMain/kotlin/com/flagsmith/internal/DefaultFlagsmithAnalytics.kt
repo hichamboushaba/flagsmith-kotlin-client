@@ -11,6 +11,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlin.concurrent.Volatile
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlin.concurrent.atomics.AtomicReference
@@ -61,6 +62,9 @@ internal class DefaultFlagsmithAnalytics(
     private val writeSignal = Channel<Unit>(Channel.CONFLATED)
 
     private var flushJob: Job? = null
+
+    @Volatile
+    private var stopped = false
     private var writerJob: Job? = null
 
     init {
@@ -69,11 +73,15 @@ internal class DefaultFlagsmithAnalytics(
     }
 
     override fun trackEvent(flagName: String) {
+        // Reads keep working after close(), so without this every later read would grow the map
+        // and enqueue into a channel nothing drains again.
+        if (stopped) return
         events.update { it + (flagName to ((it[flagName] ?: 0) + 1)) }
         writeSignal.trySend(Unit)
     }
 
     override fun stop() {
+        stopped = true
         flushJob?.cancel()
         flushJob = null
         writerJob?.cancel()

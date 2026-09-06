@@ -54,10 +54,16 @@ internal sealed class RequestKey {
         }
 
         /** Parses an [encode]d string back, or `null` for anything else. Never throws. */
+        // A foreign or truncated key must not parse: any identity key dominates a trait-less
+        // request, so `post:garbage` would suppress the first refresh of a session.
+        private fun isDigest(s: String) = s.length == 64 && s.all { it in '0'..'9' || it in 'a'..'f' }
+
         fun decode(s: String): RequestKey? = when {
             s == ENVIRONMENT_ENCODED -> Environment
-            s.startsWith(POST_TRANSIENT_PREFIX) -> Identity(transient = true, digest = s.removePrefix(POST_TRANSIENT_PREFIX))
-            s.startsWith(POST_PREFIX) -> Identity(transient = false, digest = s.removePrefix(POST_PREFIX))
+            s.startsWith(POST_TRANSIENT_PREFIX) ->
+                s.removePrefix(POST_TRANSIENT_PREFIX).takeIf(::isDigest)?.let { Identity(transient = true, digest = it) }
+            s.startsWith(POST_PREFIX) ->
+                s.removePrefix(POST_PREFIX).takeIf(::isDigest)?.let { Identity(transient = false, digest = it) }
             else -> null
         }
     }
@@ -69,10 +75,11 @@ internal sealed class RequestKey {
  * cold-start `refresh()` before `setTraits` reuses the last document instead of fetching (and
  * caching) a trait-less one. Transience must match on both sides even under dominance.
  */
-internal fun RequestKey.satisfies(request: RequestKey): Boolean = when {
+internal fun RequestKey.satisfies(request: RequestKey, allowDominance: Boolean): Boolean = when {
     this is RequestKey.Environment && request is RequestKey.Environment -> true
     this is RequestKey.Identity && request is RequestKey.Identity ->
-        transient == request.transient && (digest == request.digest || request.digest == RequestKey.EMPTY_DIGEST)
+        transient == request.transient &&
+            (digest == request.digest || (allowDominance && request.digest == RequestKey.EMPTY_DIGEST))
     else -> false
 }
 
