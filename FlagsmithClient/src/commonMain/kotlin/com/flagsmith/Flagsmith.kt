@@ -178,36 +178,47 @@ class Flagsmith internal constructor(
         sseUpdatesJob = eventService?.subscribeToEvents()
     }
 
-    suspend fun getFeatureFlags(
-        traits: List<Trait>? = null,
-        transient: Boolean = false,
-        forceRefresh: Boolean = false
-    ): Result<List<Flag>> {
-        // Without this a closed instance keeps answering from the gate, so the "unusable
-        // afterwards" contract would only surface once the TTL happened to expire.
+    /**
+     * Fetches this instance's document and updates the flags served by reads on success - the
+     * only call that touches the network for flags. Cheap to call repeatedly: within
+     * [FlagsmithCacheConfig.cacheTTL] of a matching fetch it costs nothing. [force] bypasses that.
+     */
+    suspend fun refresh(force: Boolean = false): Result<Unit> {
         check(!closed) { CLOSED_MESSAGE }
 
-        if (!forceRefresh && traits == null && !transient) {
-            cachedFlagsWithinTtl()?.let { return Result.success(it) }
+        if (!force) {
+            cachedFlagsWithinTtl()?.let { return Result.success(Unit) }
         }
 
+        val traits = traitState.load().values.toList()
         val seq = beginOperation()
-        val result = fetchFlags(traits, transient)
+        val result = fetchFlags(traits)
 
-        // Emit and cache BEFORE falling back: a defaults fallback must never overwrite the
-        // last-known flags in the flow, nor reach the disk snapshot.
-        if (result.isSuccess) {
-            applyFlags(result.getOrThrow(), seq, cacheable = isCacheable(transient, traits))
-        }
-
-        return result.recoverCatching { error -> lastKnownFlagsOrDefaults(error) }
+        return result.fold(
+            onSuccess = { flags ->
+                applyFlags(flags, seq, cacheable = isCacheable(transientIdentity, traits))
+                Result.success(Unit)
+            },
+            onFailure = { error -> Result.failure(error) }
+        )
     }
 
-    suspend fun hasFeatureFlag(featureId: String): Result<Boolean> =
-        getFeatureFlag(featureId).map { flag -> flag != null }
+    /** Present *and* enabled. Tracks analytics on every call, including reads served from [defaultFlags]. */
+    fun hasFeatureFlag(featureId: String): Boolean {
+        val found = flagsState.value.any { it.feature.name == featureId && it.enabled }
+        analytics?.trackEvent(featureId)
+        return found
+    }
 
-    suspend fun getValueForFeature(featureId: String): Result<Any?> =
-        getFeatureFlag(featureId).map { flag -> flag?.featureStateValue }
+    /**
+     * A flag's value, whether or not it is enabled; `null` only if the flag is absent. `enabled`
+     * is a separate switch, read it with [hasFeatureFlag].
+     */
+    fun getValueForFeature(featureId: String): Any? {
+        val flag = flagsState.value.find { it.feature.name == featureId }
+        analytics?.trackEvent(featureId)
+        return flag?.featureStateValue
+    }
 
     /** A read-only diagnostic of the server's *stored* view of this identity. */
     suspend fun getIdentity(): Result<IdentityFlagsAndTraits> {
@@ -324,30 +335,11 @@ class Flagsmith internal constructor(
         }
     }
 
-    private suspend fun fetchFlags(traits: List<Trait>?, transient: Boolean): Result<List<Flag>> {
-        if (identity == null) {
-            // Traits belong to an identity, so this combination is a programming error.
-            if (traits != null) error(IDENTITY_REQUIRED_MESSAGE)
-            return flagSmithApi.getFlags()
-        }
-
+    private suspend fun fetchFlags(traits: List<Trait>): Result<List<Flag>> = if (identity == null) {
+        flagSmithApi.getFlags()
+    } else {
         // Always POST, even with no traits: an empty-trait POST still returns the identity's stored view.
-        return flagSmithApi.postTraits(IdentityAndTraits(identity, traits.orEmpty(), transient)).map { it.flags }
-    }
-
-    /**
-     * Fallback for a failed fetch. With [FlagsmithCacheConfig.acceptStaleCache] we serve the
-     * last-known document — including when it is legitimately empty, which is why the check is on
-     * "have we ever fetched" rather than on the list being non-empty.
-     */
-    private suspend fun lastKnownFlagsOrDefaults(error: Throwable): List<Flag> {
-        val document = stateMutex.withLock { cachedLocked() }
-
-        return if (cacheConfig.enableCache && cacheConfig.acceptStaleCache && document.fetchedAtMillis > 0L) {
-            document.flags
-        } else {
-            defaultFlags.ifEmpty { throw error }
-        }
+        flagSmithApi.postTraits(IdentityAndTraits(identity, traits, transientIdentity)).map { it.flags }
     }
 
     /** Allocates the ordering token for a flag-producing operation. Called at operation entry. */
@@ -405,12 +397,6 @@ class Flagsmith internal constructor(
         cached = CachedDocument(document.flags, document.fetchedAtMillis, knownStale = true)
     }
 
-    private suspend fun getFeatureFlag(featureId: String) = getFeatureFlags().map { flags ->
-        val foundFlag = flags.find { flag -> flag.feature.name == featureId && flag.enabled }
-        analytics?.trackEvent(featureId)
-        foundFlag
-    }
-
     private fun FlagsmithEventService.subscribeToEvents() = sseEventsFlow
         .onEach { event ->
             lastEventUpdate = event.updatedAt ?: lastEventUpdate
@@ -424,7 +410,7 @@ class Flagsmith internal constructor(
                 // fail. Nothing is logged on success - a stale or defaults fallback also returns
                 // a successful Result, so it would not mean we got the new values.
                 markCachedDocumentStale()
-                getFeatureFlags(forceRefresh = true) { res ->
+                refresh(force = true) { res ->
                     if (res.isFailure) {
                         // TODO: provide a logging mechanism
                         println("Error getting flags in SSE stream: ${res.exceptionOrNull()}")

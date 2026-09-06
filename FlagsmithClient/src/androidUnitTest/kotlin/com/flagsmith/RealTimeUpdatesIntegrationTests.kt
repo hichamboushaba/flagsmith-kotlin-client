@@ -119,7 +119,8 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
     @Test(timeout = 60000)
     @Ignore("Ignore temporarily")
     fun testGettingFlagsWithRealtimeUpdatesAfterPuttingNewValue() = runBlocking {
-        val currentFlags = flagsmith.getFeatureFlagsSync().getOrThrow()
+        flagsmith.refreshSync().getOrThrow()
+        val currentFlags = flagsmith.flagUpdateFlow.value
 
         // Find our flag
         val currentFlag: Flag = currentFlags.first { flag -> flag.feature.name == featureId }
@@ -171,7 +172,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
         val expectedNewValue = "new-value-after-reconnect"
         // Get the current value
         val currentFlagValueString =
-            flagsmith.getValueForFeatureSync(featureId).getOrThrow() as String?
+            flagsmith.getValueForFeature(featureId) as String?
         Assert.assertNotNull(currentFlagValueString)
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -198,7 +199,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
         Assert.assertEquals(expectedNewValue, newUpdatedFeatureValue)
 
         // Now get the flag again using the normal API and check the value is the same
-        val newUpdatedFeatureValueFromApi = flagsmith.getValueForFeatureSync(featureId).getOrThrow() as String?
+        val newUpdatedFeatureValueFromApi = flagsmith.getValueForFeature(featureId) as String?
         Assert.assertEquals(expectedNewValue, newUpdatedFeatureValueFromApi)
         flagsmith.close()
     }
@@ -208,7 +209,7 @@ class RealTimeUpdatesIntegrationTests : FlagsmithEventTimeTracker {
     fun testGettingFlagsWithRealtimeUpdatesViaFlagUpdateFlow() = runBlocking {
         // Get the current value
         val currentFlagValueString =
-            flagsmith.getValueForFeatureSync(featureId).getOrThrow() as String?
+            flagsmith.getValueForFeature(featureId) as String?
         Assert.assertNotNull(currentFlagValueString)
 
         // After 5 seconds try to update the value using the retrofit service
