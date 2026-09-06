@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file. The format is b
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-09-06
 
 Fetch and read are now separate. `refresh()` is the only call that touches the network for flags.
 `hasFeatureFlag()` and `getValueForFeature()` are synchronous reads; `observeHasFeatureFlag()` and
@@ -114,6 +114,21 @@ before upgrading — most apps need to add a `refresh()` call somewhere, and not
 - Cached flags documents now record the canonical identity of the request that produced them (an
   environment fetch or a POST digested from its traits). This fixes a defect where a POST-derived
   document could be served by the TTL gate to a later trait-less call, or vice versa.
+- **Analytics stopped reporting after its first successful send.** Clearing the stored counts wrote
+  an empty map through the settings serializer, which throws; the exception escaped inside the flush
+  coroutine and killed it, so nothing was posted again for the life of the process.
+- **Analytics lost evaluations counted while a post was in flight.** The flush cleared the counters
+  after the request rather than taking them, discarding anything recorded in between. It now takes
+  and clears in one step, and merges the batch back if the post fails, so a dropped connection no
+  longer loses counts either.
+- **Analytics lost increments under concurrent reads.** Counting was a plain read-modify-write; two
+  reads from different threads could each observe the same value and one increment would vanish.
+  Counters are now atomic — with eight threads recording 16,000 evaluations, the old approach
+  registered 3,036.
+- **Counting no longer writes to disk on the calling thread.** `trackEvent` used to serialise and
+  rewrite the whole counter map through `Settings` on whatever thread read the flag. That was
+  tolerable when reads suspended; now that they are synchronous and run on the main thread during
+  startup, counts are held in memory and mirrored to disk by a single throttled writer instead.
 
 ### Removed — BREAKING
 
