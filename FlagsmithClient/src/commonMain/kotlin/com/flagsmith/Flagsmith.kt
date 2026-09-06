@@ -14,9 +14,12 @@ import com.flagsmith.internal.http.FlagsmithApi
 import com.flagsmith.internal.http.FlagsmithEventApi
 import io.ktor.util.date.getTimeMillis
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -81,11 +84,6 @@ class Flagsmith internal constructor(
 
     private val flagSmithApi: FlagsmithApi
     private val analytics: FlagsmithAnalytics?
-
-    /**
-     * Persists the flags most recently emitted to [flagUpdateFlow] so they survive a cold start.
-     * `null` when caching is disabled.
-     */
     private val flagsCache: FlagsCache?
 
     // The last time we got an event from the SSE stream or via the API
@@ -117,14 +115,17 @@ class Flagsmith internal constructor(
         )
     }
 
-    /**
-     * Backing state of [flagUpdateFlow]. `by lazy` guarantees the priming read happens exactly
-     * once, happens-before any observer, and before any write that goes through [flagsState].
-     */
+    // Lazy: an eager initializer would run before `init` assigns [flagsCache] and prime from defaults.
     private val flagsState: MutableStateFlow<List<Flag>> by lazy { MutableStateFlow(primed.flags) }
 
-    /** The most recently known flags: primed from disk on first access, then updated by every successful fetch. */
-    val flagUpdateFlow: StateFlow<List<Flag>> get() = flagsState
+    /** The most recently known flags: primed from disk on first access, then updated by every successful [refresh]. */
+    internal val flagUpdateFlow: StateFlow<List<Flag>> get() = flagsState
+
+    /**
+     * Emits once on collection and again whenever the flags change. Carries no values and counts no
+     * evaluation; read with [hasFeatureFlag]/[getValueForFeature] or observe a single flag.
+     */
+    val flagsChanged: Flow<Unit> get() = flagsState.map { }
 
     /**
      * This instance's traits: in memory only, never persisted, sent in full on every identity-scoped
@@ -218,6 +219,30 @@ class Flagsmith internal constructor(
         analytics?.trackEvent(featureId)
         return flag?.featureStateValue
     }
+
+    /**
+     * [hasFeatureFlag] as a flow: emits on collection and whenever the observed enabled state changes.
+     * Counts one evaluation per emission, so a long-lived collector whose value never changes
+     * counts once; in a process that outlives the analytics window, read imperatively instead.
+     */
+    fun observeHasFeatureFlag(featureId: String): Flow<Boolean> =
+        observeFeature(featureId) { flag -> flag != null && flag.enabled }
+
+    /**
+     * [getValueForFeature] as a flow: emits on collection and whenever the observed value changes.
+     * Changing only a flag's `enabled` state does not make this flow emit. Evaluations are counted
+     * as in [observeHasFeatureFlag].
+     */
+    fun observeValueForFeature(featureId: String): Flow<Any?> =
+        observeFeature(featureId) { flag -> flag?.featureStateValue }
+
+    private fun <T> observeFeature(featureId: String, project: (Flag?) -> T): Flow<T> =
+        flagsState
+            .map { flags -> project(flags.find { it.feature.name == featureId }) }
+            // After distinctUntilChanged, not before: an evaluation is a value the collector
+            // actually received, so a refresh that leaves this flag alone must not count.
+            .distinctUntilChanged()
+            .onEach { analytics?.trackEvent(featureId) }
 
     /** A read-only diagnostic of the server's *stored* view of this identity. */
     suspend fun getIdentity(): Result<IdentityFlagsAndTraits> {
