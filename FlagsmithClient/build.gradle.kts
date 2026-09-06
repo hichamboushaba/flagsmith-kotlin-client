@@ -72,6 +72,7 @@ kotlin {
                 implementation(kotlin("test"))
                 implementation(libs.kotlinx.coroutines.test)
                 implementation(libs.okio.fakefilesystem)
+                implementation(libs.multiplatform.settings.test)
             }
         }
 
