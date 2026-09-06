@@ -21,15 +21,13 @@ private const val DIR_NAME = "flagsmith-flags-cache"
 private const val LEGACY_HTTP_CACHE_DIR = "flagsmith"
 private const val DEFAULT_MAX_FILES = 4
 private const val DEFAULT_MAX_FILE_BYTES = 1L shl 20 // 1 MB
-private const val FORMAT_VERSION = 1
+private const val FORMAT_VERSION = 2
 
 /**
- * Persists the flags most recently emitted to [com.flagsmith.Flagsmith.flagUpdateFlow] so they can
- * be primed back into the flow on the next cold start, before any network call.
- *
- * One file per [Scope] (base url + environment key + identity). Writes go to a temp file followed
- * by an atomic rename, which is what makes [readIfValid] safe to call without a lock: a reader
- * observes either the complete old file or the complete new one, never a torn one.
+ * Persists the flags most recently emitted to `flagUpdateFlow` so they can prime it on the next
+ * cold start, before any network call. One file per [Scope]. Writes go to a temp file followed by
+ * an atomic rename, which is what makes [readIfValid] safe without a lock: a reader sees either
+ * the complete old file or the complete new one.
  */
 internal class FlagsCache(
     private val baseDirectory: Path,
@@ -42,10 +40,18 @@ internal class FlagsCache(
     private val fileSystem: FileSystem = FileSystem.SYSTEM,
     private val nowMillis: () -> Long = ::getTimeMillis,
 ) {
+    /**
+     * Deliberately excludes the transient marker: a transient and a non-transient instance for one
+     * identity share the snapshot for priming, and the request key keeps them apart at the gate.
+     */
     internal data class Scope(val baseUrl: String, val environmentKey: String, val identity: String?)
 
-    /** A valid cached document: the flags plus the instant they were fetched at. */
-    internal data class Snapshot(val flags: List<Flag>, val savedAtEpochMillis: Long)
+    /** A valid cached document, with the encoded request key it was fetched under. */
+    internal data class Snapshot(
+        val flags: List<Flag>,
+        val savedAtEpochMillis: Long,
+        val requestKey: String?,
+    )
 
     /** On-disk format. Private: nothing outside this class should depend on it. */
     @Serializable
@@ -53,6 +59,7 @@ internal class FlagsCache(
         val version: Int = FORMAT_VERSION,
         val scopeHash: String,
         val savedAtEpochMillis: Long,
+        val requestKey: String? = null,
         val flags: List<Flag>
     )
 
@@ -70,46 +77,46 @@ internal class FlagsCache(
 
     private val ioMutex = Mutex()
 
-    // Ordering guard: advanced even when the write below fails, so a superseded write can never
-    // land after a newer one.
+    // Advanced even when the write fails, so a superseded write can never land after a newer one.
     private var lastWrittenSeq = 0L // guarded by ioMutex
 
-    // What is actually on disk. Only advanced by a write that completed, so `clear` can tell a
+    // What is actually on disk: only advanced by a write that completed, so `clear` can tell a
     // real post-clear snapshot from one whose write was skipped or threw.
     private var lastPersistedSeq = 0L // guarded by ioMutex
     private var legacyHttpCacheCleaned = false // guarded by ioMutex
 
     /**
-     * Returns the cached flags if a valid, in-policy snapshot exists, otherwise `null`.
-     *
-     * Non-suspending and lock-free: it runs on the caller's thread the first time `flagUpdateFlow`
-     * is accessed. Never throws — a missing, oversized, corrupt, foreign or expired file is simply
-     * "no snapshot".
+     * The cached flags if a valid, in-policy snapshot exists, otherwise `null`. Lock-free and never
+     * throws: a missing, oversized, corrupt, foreign or expired file is simply "no snapshot".
      */
     fun readIfValid(): Snapshot? {
         val cached = runCatching { readCachedFlags() }.getOrNull() ?: return null
         if (cached.version != FORMAT_VERSION || cached.scopeHash != scopeHash) return null
 
-        // A future-dated snapshot (the clock moved backwards) counts as fresh rather than being
-        // discarded: priming only decides whether the flow starts populated, it never suppresses
-        // a fetch, so the worst case is showing known-good flags for one request. Only the TTL
-        // gate suppresses fetches, which is why that one must not clamp - see
-        // Flagsmith.cachedFlagsWithinTtl.
+        // A future-dated snapshot (the clock moved backwards) counts as fresh: priming never
+        // suppresses a fetch, so the worst case is showing known-good flags for one request. The
+        // TTL gate does suppress fetches, which is why it must not clamp - see Flagsmith.withinTtlGate.
         val ageMillis = (nowMillis() - cached.savedAtEpochMillis).coerceAtLeast(0)
         if (!acceptStale && ageMillis > ttl.inWholeMilliseconds) return null
 
-        return Snapshot(cached.flags, cached.savedAtEpochMillis)
+        return Snapshot(cached.flags, cached.savedAtEpochMillis, cached.requestKey)
     }
 
     /**
-     * Persists [flags] for the operation identified by [seq]. Out-of-order or superseded writes
-     * (older than the newest one already handled) are dropped. Never throws.
+     * Persists [flags] for the operation [seq], tagged with the encoded [requestKey]. The key is
+     * persisted, never the traits: they are user PII and the cache directory is unencrypted.
+     * Superseded writes are dropped. Never throws.
      */
-    suspend fun write(flags: List<Flag>, seq: Long, fetchedAtMillis: Long): Unit = withContext(Dispatchers.IO) {
+    suspend fun write(
+        flags: List<Flag>,
+        seq: Long,
+        fetchedAtMillis: Long,
+        requestKey: String?,
+    ): Unit = withContext(Dispatchers.IO) {
         ioMutex.withLock {
             if (seq > lastWrittenSeq) {
                 lastWrittenSeq = seq
-                val persisted = runCatching { writeSnapshot(flags, fetchedAtMillis) }.getOrDefault(false)
+                val persisted = runCatching { writeSnapshot(flags, fetchedAtMillis, requestKey) }.getOrDefault(false)
                 if (persisted) lastPersistedSeq = seq
             }
         }
@@ -117,18 +124,16 @@ internal class FlagsCache(
     }
 
     /**
-     * Deletes this scope's snapshot, leaving sibling scopes sharing the directory untouched.
-     * [barrierSeq] is the sequence barrier captured by `Flagsmith.clearCache()`; any write
-     * requested with a lower or equal sequence is dropped, so an operation started before the
-     * clear can never repopulate the file afterwards.
+     * Deletes this scope's snapshot, leaving sibling scopes untouched. Any write with a sequence at
+     * or below [barrierSeq] (captured by `Flagsmith.clearCache()`) is dropped, so an operation
+     * started before the clear can never repopulate the file.
      */
     suspend fun clear(barrierSeq: Long): Unit = withContext(Dispatchers.IO) {
         ioMutex.withLock {
-            // A snapshot from after this clear was requested is already on disk, so it supersedes
-            // the clear: `clearCache()` releases its state lock before dispatching here, leaving
-            // room for that write to land first. This deliberately tests what was *persisted*, not
-            // what was requested — a write whose sequence was claimed but which then threw or was
-            // skipped leaves the pre-clear file in place, and that must still be deleted.
+            // A snapshot persisted after this clear was requested supersedes it: clearCache()
+            // releases its state lock before dispatching here. This tests what was *persisted*,
+            // not what was requested: a write whose sequence was claimed but never landed leaves
+            // the pre-clear file in place, and that must still be deleted.
             if (barrierSeq < lastPersistedSeq) return@withLock
 
             lastWrittenSeq = maxOf(lastWrittenSeq, barrierSeq)
@@ -145,18 +150,21 @@ internal class FlagsCache(
     }
 
     /** Returns whether the snapshot reached disk. */
-    private fun writeSnapshot(flags: List<Flag>, fetchedAtMillis: Long): Boolean {
+    private fun writeSnapshot(flags: List<Flag>, fetchedAtMillis: Long, requestKey: String?): Boolean {
         val encoded = json.encodeToString(
-            CachedFlags(scopeHash = scopeHash, savedAtEpochMillis = fetchedAtMillis, flags = flags)
+            CachedFlags(
+                scopeHash = scopeHash,
+                savedAtEpochMillis = fetchedAtMillis,
+                requestKey = requestKey,
+                flags = flags
+            )
         ).encodeUtf8()
-        // Checked before writing so an oversized document leaves the previous snapshot intact
-        // instead of replacing it with a file that readIfValid would reject anyway.
+        // Checked before writing so an oversized document leaves the previous snapshot intact.
         if (encoded.size > maxFileBytes) return false
 
         fileSystem.createDirectories(directory, mustCreate = false)
-        // A fresh temp name per write: another FlagsCache for this scope (a second instance, or
-        // another process) resolves to the same directory, and on a shared temp path it could
-        // truncate ours mid-write and leave us moving a half-written file over a good snapshot.
+        // A fresh temp name per write: another FlagsCache for this scope (a second instance or
+        // another process) sharing one temp path could truncate ours mid-write.
         val tmpFile = directory / "$scopeHash.${Random.nextInt().toUInt().toString(16)}.tmp"
         fileSystem.sink(tmpFile).buffer().use { it.write(encoded) }
 
@@ -166,10 +174,8 @@ internal class FlagsCache(
     }
 
     /**
-     * 0.1.x installations left a Ktor HTTP cache under `<cacheDirectoryPath>/flagsmith` that
-     * nothing reads anymore, so reclaim it once. The claim is latched under [ioMutex], but the
-     * delete itself deliberately runs outside the lock: it can walk megabytes of files and must
-     * not block concurrent snapshot writes. Best-effort — a failure is not retried.
+     * Reclaims the Ktor HTTP cache 0.1.x left under `<cacheDirectoryPath>/flagsmith`, once. The
+     * delete runs outside [ioMutex]: it can walk megabytes and must not block snapshot writes.
      */
     private suspend fun deleteLegacyHttpCacheOnce() {
         val claimedCleanup = ioMutex.withLock {
@@ -185,12 +191,11 @@ internal class FlagsCache(
     }
 
     /**
-     * Moves the temp file over the snapshot, falling back to an in-place write of [encoded].
-     *
-     * The fallback deliberately writes from memory rather than copying from the temp file, which
-     * may be gone by the time we get here: another `FlagsCache` for the same scope sweeps this
-     * directory's temp files on every write. Copying would then fail with the target already
-     * truncated, leaving an empty file where a valid snapshot used to be.
+     * Moves the temp file over the snapshot, falling back to an in-place write of [encoded]. The
+     * fallback deliberately writes from memory rather than copying the temp file, which may already
+     * be gone: another `FlagsCache` for the same scope sweeps this directory's temp files on every
+     * write. Copying would then fail with the target already truncated, leaving an empty file where
+     * a valid snapshot used to be.
      */
     private fun replaceSnapshotWith(tmpFile: Path, encoded: ByteString) {
         if (tryAtomicMove(tmpFile)) return
@@ -225,9 +230,8 @@ internal class FlagsCache(
         runCatching {
             fileSystem.list(directory)
                 .filterNot { it.name.endsWith(".tmp") }
-                // Never prune the file we just wrote: on filesystems with coarse mtime
-                // granularity the sort order is arbitrary when several files share a tick.
-                // It counts towards maxFiles, hence `maxFiles - 1` siblings are kept.
+                // Never prune the file just written: with coarse mtime granularity the sort order
+                // among files sharing a tick is arbitrary. It counts towards maxFiles, hence `maxFiles - 1`.
                 .filterNot { it == file }
                 .sortedByDescending { fileSystem.metadata(it).lastModifiedAtMillis ?: 0L }
                 .drop(maxFiles - 1)

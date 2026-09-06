@@ -7,6 +7,8 @@ import com.flagsmith.internal.FlagsCache
 import com.flagsmith.internal.FlagsmithAnalytics
 import com.flagsmith.internal.FlagsmithEventService
 import com.flagsmith.internal.FlagsmithEventTimeTracker
+import com.flagsmith.internal.RequestKey
+import com.flagsmith.internal.satisfies
 import com.flagsmith.internal.update
 import com.flagsmith.internal.http.FlagsmithApi
 import com.flagsmith.internal.http.FlagsmithEventApi
@@ -89,10 +91,8 @@ class Flagsmith internal constructor(
     // The last time we got an event from the SSE stream or via the API
     private var lastEventUpdate: Double = 0.0
 
-    // Guards [seqCounter], [lastAppliedSeq], [staleAsOfSeq], [cached] and the [flagsState] write.
-    // Never held across network IO, and never while [FlagsCache]'s own lock is taken. The one
-    // exception is the first touch, where resolving [primed] reads the snapshot file under this
-    // lock; that read takes no locks itself, so the ordering stays acyclic.
+    // Guards the sequence counters, [cached] and the [flagsState] write. Never held across network
+    // IO, and never while [FlagsCache]'s own lock is taken.
     private val stateMutex = Mutex()
     private var seqCounter = 0L
     private var lastAppliedSeq = 0L
@@ -101,21 +101,20 @@ class Flagsmith internal constructor(
     // Anything allocated at or below it may carry a pre-event response.
     private var staleAsOfSeq = 0L
 
-    // The document the TTL gate and the stale fallback may reuse, and when it was fetched
-    // (`0L` = nothing reusable). Deliberately NOT [flagsState]: the flow holds whatever was
-    // emitted last, including transient documents, which must never satisfy a gated call.
-    // `null` means "not resolved from [primed] yet". Never use [lastFlagFetchTime] as the clock
-    // here — that is the server's document timestamp and belongs to the SSE stream.
+    // The document the TTL gate may reuse. Deliberately not [flagsState]: the flow also holds
+    // documents with no reusable key, which must never satisfy a gated call. `null` means not yet
+    // resolved from [primed]. [lastFlagFetchTime] is the server's timestamp for the SSE stream,
+    // never the clock here.
     private var cached: CachedDocument? = null
 
-    /**
-     * The one-time priming read, shared by [flagsState] and the TTL gate. Seeding the gate from
-     * disk keeps it warm across process death, exactly as it was warm from the previous session's
-     * last fetch.
-     */
+    /** The one-time priming read, shared by [flagsState] and the TTL gate. */
     private val primed: CachedDocument by lazy {
         val snapshot = flagsCache?.readIfValid()
-        CachedDocument(snapshot?.flags ?: defaultFlags, snapshot?.savedAtEpochMillis ?: 0L)
+        CachedDocument(
+            flags = snapshot?.flags ?: defaultFlags,
+            fetchedAtMillis = snapshot?.savedAtEpochMillis ?: 0L,
+            requestKey = snapshot?.requestKey?.let { RequestKey.decode(it) }
+        )
     }
 
     /**
@@ -186,8 +185,8 @@ class Flagsmith internal constructor(
     suspend fun refresh(force: Boolean = false): Result<Unit> {
         check(!closed) { CLOSED_MESSAGE }
 
-        if (!force) {
-            cachedFlagsWithinTtl()?.let { return Result.success(Unit) }
+        if (!force && withinTtlGate(RequestKey.forRequest(identity, traits, transientIdentity))) {
+            return Result.success(Unit)
         }
 
         val traits = traitState.load().values.toList()
@@ -196,7 +195,7 @@ class Flagsmith internal constructor(
 
         return result.fold(
             onSuccess = { flags ->
-                applyFlags(flags, seq, cacheable = isCacheable(transientIdentity, traits))
+                applyFlags(flags, seq, RequestKey.forRequest(identity, traits, transientIdentity))
                 Result.success(Unit)
             },
             onFailure = { error -> Result.failure(error) }
@@ -250,17 +249,13 @@ class Flagsmith internal constructor(
     }
 
     /**
-     * Forgets everything this instance knows: the cached document on disk, the in-memory flags
-     * (reset to the configured defaults) and the TTL gate, so the next call hits the network.
-     * Flag requests already in flight are discarded.
-     *
-     * Unlike the fetching methods this still works after [close], so `close()` then `clearCache()`
-     * remains a valid teardown order — it touches no network client.
+     * Resets the flags served by reads to [defaultFlags] and deletes the on-disk snapshot, so
+     * the next [refresh] hits the network. Does not touch trait state. Still works after [close].
      */
     suspend fun clearCache() {
         val barrier = stateMutex.withLock {
             lastAppliedSeq = seqCounter
-            cached = CachedDocument(defaultFlags, fetchedAtMillis = 0L)
+            cached = CachedDocument(defaultFlags, fetchedAtMillis = 0L, requestKey = null)
             flagsState.value = defaultFlags
             seqCounter
         }
@@ -297,13 +292,22 @@ class Flagsmith internal constructor(
         eventService?.close()
     }
 
-    private class CachedDocument(
+    private data class CachedDocument(
         val flags: List<Flag>,
         val fetchedAtMillis: Long,
         /**
-         * Set when a real-time event told us the server changed. The document stays available as
-         * an offline fallback, but must never satisfy a TTL-gated call again — otherwise a failed
-         * event-triggered refresh would suppress every retry for the rest of the TTL.
+         * The key of the request that produced this document, or `null` when no fetch did (the
+         * defaults seeded by [clearCache], an unkeyable or undecodable snapshot); such a document
+         * primes the flow but never satisfies the gate. Stored with the document at response time,
+         * under [stateMutex], which is what makes a late response from a superseded request safe:
+         * it lands with the key of the request that produced it, and the next call mismatches and
+         * refetches.
+         */
+        val requestKey: RequestKey? = null,
+        /**
+         * Set when a real-time event said the server changed. The document stays as an offline
+         * fallback but must never satisfy a gated call again, or a failed event-triggered refresh
+         * would suppress every retry for the rest of the TTL.
          */
         val knownStale: Boolean = false,
     )
@@ -311,27 +315,24 @@ class Flagsmith internal constructor(
     private fun requireIdentity(): String = identity ?: error(IDENTITY_REQUIRED_MESSAGE)
 
     /**
-     * The in-memory TTL gate: within [FlagsmithCacheConfig.cacheTTL] of the last successful fetch
-     * we answer from the last reusable document without touching Ktor at all. Returns `null` when
-     * the caller must go to the network.
+     * Whether [refresh] for [requestKey] can be answered from memory. `false` sends the caller to
+     * the network, including for a `null` key or a document whose key does not [satisfies] it.
      */
-    private suspend fun cachedFlagsWithinTtl(): List<Flag>? {
-        if (!cacheConfig.enableCache) return null
+    private suspend fun withinTtlGate(requestKey: RequestKey?): Boolean {
+        if (!cacheConfig.enableCache || requestKey == null) return false
 
         return stateMutex.withLock {
             val document = cachedLocked()
             val fetchedAt = document.fetchedAtMillis
-            // Deliberately a two-sided window rather than a clamped elapsed time. A device
-            // whose clock was ahead stamps `fetchedAt` in the future; clamping the resulting
-            // negative age to zero would make the gate hit forever, and since only a fetch
-            // restamps `fetchedAt`, nothing would ever break the loop. As written, any clock
-            // jump in either direction is a miss: one extra request, then it self-heals.
+            // Deliberately a two-sided window, not a clamped age. A device clock that was ahead
+            // stamps `fetchedAt` in the future; clamping the negative age to zero would make the
+            // gate hit forever, since only a fetch restamps `fetchedAt`. As written, a clock jump
+            // in either direction costs one extra request and then self-heals.
             val age = nowMillis() - fetchedAt
-            document.flags.takeIf {
+            document.requestKey?.satisfies(requestKey) == true &&
                 !document.knownStale &&
-                    fetchedAt > 0L &&
-                    age in 0..cacheConfig.cacheTTL.inWholeMilliseconds
-            }
+                fetchedAt > 0L &&
+                age in 0..cacheConfig.cacheTTL.inWholeMilliseconds
         }
     }
 
@@ -342,25 +343,15 @@ class Flagsmith internal constructor(
         flagSmithApi.postTraits(IdentityAndTraits(identity, traits, transientIdentity)).map { it.flags }
     }
 
-    /** Allocates the ordering token for a flag-producing operation. Called at operation entry. */
+    /** Allocates the ordering token for a flag-producing operation. */
     private suspend fun beginOperation(): Long = stateMutex.withLock { ++seqCounter }
 
     /**
-     * A transient identity, or traits the server won't store, produce a document that doesn't
-     * represent this identity's stored state. Such a document is still emitted, but it must
-     * neither reach the disk snapshot nor satisfy a later TTL-gated call.
+     * Applies [flags] unless a newer operation (or [clearCache]) already has. Only a document with a
+     * reusable [requestKey] advances the gate and reaches disk; the rest are emitted but never cached.
      */
-    private fun isCacheable(transient: Boolean, traits: List<Trait>?): Boolean =
-        !transient && traits.orEmpty().none { it.transient }
-
-    /**
-     * Applies [flags] to [flagsState] unless a newer operation has already applied (or [clearCache]
-     * has invalidated everything up to the current sequence). Only a [cacheable] document advances
-     * the TTL clock and is written to the [flagsCache].
-     */
-    private suspend fun applyFlags(flags: List<Flag>, seq: Long, cacheable: Boolean) {
-        // Stamped once and shared with the disk write below, so the in-memory and on-disk clocks
-        // cannot drift apart by however long the write waits for its dispatcher and lock.
+    private suspend fun applyFlags(flags: List<Flag>, seq: Long, requestKey: RequestKey?) {
+        // Stamped once and shared with the disk write, so the in-memory and on-disk clocks cannot drift.
         val fetchedAtMillis = nowMillis()
 
         val accepted = stateMutex.withLock {
@@ -368,33 +359,32 @@ class Flagsmith internal constructor(
                 false
             } else {
                 lastAppliedSeq = seq
-                if (cacheable) {
+                if (requestKey != null) {
                     // An operation allocated before the last real-time event may be answering with
                     // a document generated before that event, so it must not clear the stale mark.
-                    cached = CachedDocument(flags, fetchedAtMillis, knownStale = seq <= staleAsOfSeq)
+                    cached = CachedDocument(
+                        flags,
+                        fetchedAtMillis,
+                        requestKey,
+                        knownStale = seq <= staleAsOfSeq
+                    )
                 }
                 flagsState.value = flags
                 true
             }
         }
-        if (accepted && cacheable) {
-            flagsCache?.write(flags, seq, fetchedAtMillis)
+        if (accepted && requestKey != null) {
+            flagsCache?.write(flags, seq, fetchedAtMillis, requestKey.encode())
         }
     }
 
     /** Call only while holding [stateMutex]. Resolves the primed snapshot on first use. */
     private fun cachedLocked(): CachedDocument = cached ?: primed.also { cached = it }
 
-    /**
-     * Marks the cached document known-stale. The 0.1.x code deleted its HTTP cache here, which was
-     * durable: after a failed refresh every later read went back to the network. `forceRefresh`
-     * alone only skips the gate for one call, so without this a failed event-triggered refresh
-     * would leave the superseded document serving reads for the rest of its TTL.
-     */
+    /** Retires the cached document from the gate; see [CachedDocument.knownStale]. */
     private suspend fun markCachedDocumentStale() = stateMutex.withLock {
         staleAsOfSeq = seqCounter
-        val document = cachedLocked()
-        cached = CachedDocument(document.flags, document.fetchedAtMillis, knownStale = true)
+        cached = cachedLocked().copy(knownStale = true)
     }
 
     private fun FlagsmithEventService.subscribeToEvents() = sseEventsFlow
